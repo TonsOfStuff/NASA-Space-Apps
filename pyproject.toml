@@ -1,0 +1,20 @@
+[project]
+name = "spaceapps"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "bitofbeans", email = "quobits@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "matplotlib>=3.11.2",
+    "scipy>=1.18.1",
+]
+
+[project.scripts]
+spaceapps = "spaceapps:main"
+
+[build-system]
+requires = ["uv_build>=0.13.8,<0.14.0"]
+build-backend = "uv_build"
