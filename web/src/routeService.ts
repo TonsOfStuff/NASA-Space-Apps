@@ -1,9 +1,8 @@
 import type { MarsCoordinate, RegionManifest } from "./types";
 
 /**
- * Proposed adapter contract, pending agreement with the backend team.
- * Replace this module to map a different API or coordinate system; the UI
- * should not need to know about the backend's wire format.
+ * Frontend adapter for the route API. Keep backend-specific wire format and
+ * coordinate conversions here if a different service is connected later.
  */
 export interface RouteRequest {
   regionId: string;
@@ -27,10 +26,22 @@ export interface RouteResult {
   evaluatedDestination: MarsCoordinate | null;
   resolutionM: MarsCoordinate | null;
   warnings: string[];
+  thermalInertia: { coverageFraction: number; meanAlongRoute: number | null; units: string } | null;
 }
 
-const endpoint = (import.meta.env?.VITE_ROUTE_API_URL as string | undefined)?.trim() ?? "";
+const endpoint = (import.meta.env?.VITE_ROUTE_API_URL as string | undefined)?.trim() ||
+  (import.meta.env?.DEV ? "http://127.0.0.1:8000/api/route" : "/api/route");
 export const isRouteServiceConfigured = Boolean(endpoint);
+
+/** On-demand layers live alongside the route endpoint; no tile archive is required. */
+export function environmentalLayerUrls(localSolarTime: string): { shade: string; thermal: string } {
+  const configuredBase = (import.meta.env?.VITE_MAP_API_BASE_URL as string | undefined)?.trim();
+  const base = (configuredBase || endpoint.replace(/\/route(?:\?.*)?$/, "")).replace(/\/$/, "");
+  return {
+    shade: `${base}/tiles/shade/{z}/{x}/{y}.png?localSolarTime=${encodeURIComponent(localSolarTime)}`,
+    thermal: `${base}/tiles/thermal/{z}/{x}/{y}.png`,
+  };
+}
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -103,6 +114,13 @@ export function parseRouteResponse(payload: unknown, region: RegionManifest): Ro
       (payload.evaluatedDestination != null && (!evaluatedDestination || !inRegion(evaluatedDestination, region)))) {
     throw new Error("The route service returned an invalid evaluated location.");
   }
+  const thermal = isObject(payload.thermalInertia) ? payload.thermalInertia : null;
+  const thermalInertia = thermal && typeof thermal.coverageFraction === "number" && Number.isFinite(thermal.coverageFraction) &&
+    thermal.coverageFraction >= 0 && thermal.coverageFraction <= 1 &&
+    (thermal.meanAlongRoute === null || (typeof thermal.meanAlongRoute === "number" && Number.isFinite(thermal.meanAlongRoute))) &&
+    typeof thermal.units === "string"
+    ? { coverageFraction: thermal.coverageFraction, meanAlongRoute: thermal.meanAlongRoute, units: thermal.units }
+    : null;
   return {
     status: payload.status,
     path,
@@ -112,5 +130,6 @@ export function parseRouteResponse(payload: unknown, region: RegionManifest): Ro
     evaluatedDestination,
     resolutionM: coordinate(payload.resolutionM),
     warnings: Array.isArray(payload.warnings) ? payload.warnings.filter((warning): warning is string => typeof warning === "string") : [],
+    thermalInertia,
   };
 }

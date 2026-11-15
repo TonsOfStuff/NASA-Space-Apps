@@ -1,15 +1,17 @@
 import { Fragment, lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, Box, ChevronDown, CircleHelp, Clock3, Compass, Layers3, LoaderCircle, Map as MapIcon, MapPin, Navigation, RotateCcw, Route, SlidersHorizontal, TriangleAlert, X } from "lucide-react";
 import Map2D from "./components/Map2D";
-import { isRouteServiceConfigured, requestRoute, type RouteResult } from "./routeService";
+import { environmentalLayerUrls, isRouteServiceConfigured, requestRoute, type RouteResult } from "./routeService";
 import type { CoverageVisibility, LayerId, LayerVisibility, MarkerKind, MarsCoordinate, RegionManifest } from "./types";
 
 const Map3D = lazy(() => import("./components/Map3D"));
 const manifestUrl = (import.meta.env.VITE_REGION_MANIFEST_URL as string | undefined)?.trim() || "/data/gale/manifest.json";
-const initialLayers: LayerVisibility = { imagery: true, elevation: false, slope: false, coverage: true };
+const initialLayers: LayerVisibility = { imagery: true, elevation: false, slope: false, shade: false, thermal: false, coverage: true };
 const layerDescriptions: { id: LayerId; label: string; description: string }[] = [
   { id: "imagery", label: "Surface imagery", description: "CTX orbital mosaic" },
   { id: "elevation", label: "Elevation", description: "Relative terrain height" },
+  { id: "shade", label: "Shade", description: "Local solar time · approximate" },
+  { id: "thermal", label: "Thermal inertia", description: "Surface data · ~100 m source" },
   { id: "slope", label: "Slope", description: "Approximate · 0–30°+" },
   { id: "coverage", label: "Data coverage", description: "Missing & estimated elevation" },
 ];
@@ -200,6 +202,7 @@ export default function App() {
     region: data.manifest,
     layers,
     coverage,
+    environmentalLayers: environmentalLayerUrls(/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(marsLocalTime) ? marsLocalTime : "12:00"),
     start,
     destination,
     stop: result?.stop ?? null,
@@ -264,6 +267,7 @@ export default function App() {
                   </Fragment>
                 ))}
                 {layers.slope && <div className="slope-legend"><span>Approximate slope</span><div className="slope-ramp" /><div className="legend-ticks"><span>0°</span><span>10°</span><span>20°</span><span>30°+</span></div></div>}
+                {layers.thermal && <div className="slope-legend"><span>Thermal inertia (TIU)</span><div className="thermal-ramp" /><div className="legend-ticks"><span>100</span><span>600+</span></div></div>}
               </div>
             )}
           </div>
@@ -327,7 +331,7 @@ export default function App() {
 
           {!isRouteServiceConfigured && <div className="service-note" role="status"><span className="service-dot" /><span>Routing not connected</span></div>}
           {message && <div className="notice" role="status"><TriangleAlert size={16} /><span>{message}</span><button className="icon-button" aria-label="Dismiss message" onClick={() => setMessage(null)}><X size={14} /></button></div>}
-          {result && <div className="result-card" role="status"><div className="result-head"><span className="eyebrow">ROUTE ESTIMATE</span><Route size={15} /></div><h3>{result.status === "reached" ? "Route ready" : result.status === "partial" ? "Partial route" : "No route found"}</h3>{result.distanceM !== null && <p className="route-distance">{formatDistance(result.distanceM)} <small>estimated distance</small></p>}{result.status === "partial" && <p>P marks a candidate stopping point.</p>}{result.status === "unreachable" && <p>The service did not find a route with these inputs.</p>}{shifts.map((shift) => <p key={shift}>{shift}</p>)}{result.warnings.map((warning, index) => <p key={`${index}-${warning}`}>{warning}</p>)}</div>}
+          {result && <div className="result-card" role="status"><div className="result-head"><span className="eyebrow">ROUTE ESTIMATE</span><Route size={15} /></div><h3>{result.status === "reached" ? "Route ready" : result.status === "partial" ? "Partial route" : "No route found"}</h3>{result.distanceM !== null && <p className="route-distance">{formatDistance(result.distanceM)} <small>estimated distance</small></p>}{result.thermalInertia && <p>Thermal inertia: {result.thermalInertia.meanAlongRoute === null ? "unavailable" : `${Math.round(result.thermalInertia.meanAlongRoute)} ${result.thermalInertia.units}`} · {Math.round(result.thermalInertia.coverageFraction * 100)}% coverage</p>}{result.status === "partial" && <p>P marks a candidate stopping point.</p>}{result.status === "unreachable" && <p>The service did not find a route with these inputs.</p>}{shifts.map((shift) => <p key={shift}>{shift}</p>)}{result.warnings.map((warning, index) => <p key={`${index}-${warning}`}>{warning}</p>)}</div>}
         </div>
       </aside>
 
@@ -335,7 +339,7 @@ export default function App() {
         <div className="help-header"><div><span className="eyebrow">MarMap</span><h2 id="help-title">Map guide</h2></div><button className="icon-button help-close" aria-label="Close map help" onClick={() => helpRef.current?.close()} autoFocus><X size={19} /></button></div>
         <div className="help-items">
           <div className="help-item"><span className="help-icon"><MapPin size={17} /></span><div><strong>Plan a trip</strong><p>Select A for the start and B for the science site. Optionally enter a mission-relative sol and local solar time at the start. The routing service supplies P as a parking candidate.</p></div></div>
-          <div className="help-item"><span className="help-icon"><Layers3 size={17} /></span><div><strong>Layers &amp; coverage</strong><p>Amber marks missing elevation; blue marks estimates. Clear areas show source data, not confirmed safety.</p></div></div>
+          <div className="help-item"><span className="help-icon"><Layers3 size={17} /></span><div><strong>Layers &amp; coverage</strong><p>Shade uses local solar time, assuming an equinox; it defaults to noon. Thermal inertia is coarse source data. Amber marks missing elevation; blue marks estimates.</p></div></div>
           <div className="help-item"><span className="help-icon"><Box size={17} /></span><div><strong>Terrain detail</strong><p>{data ? `The source grid is about ${data.manifest.pixelSize[0].toFixed(1)} m. ` : ""}The 3D view shows its current resolution; missing areas are flat markers, not heights. Imagery alignment and height units are unverified.</p></div></div>
           <div className="help-item"><span className="help-icon"><Route size={17} /></span><div><strong>Routes</strong><p>{isRouteServiceConfigured ? "Routes come from the connected service and are estimates." : "Connect a route service to calculate routes."} A partial route ends at a candidate stopping point.</p></div></div>
         </div>

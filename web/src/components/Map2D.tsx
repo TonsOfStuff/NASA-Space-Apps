@@ -20,7 +20,7 @@ import "ol/ol.css";
 
 import type { LayerId, MapViewProps, MarsCoordinate } from "../types";
 
-const layerOrder: LayerId[] = ["imagery", "elevation", "slope", "coverage"];
+const layerOrder: LayerId[] = ["imagery", "elevation", "shade", "thermal", "slope", "coverage"];
 
 function markerStyle(label: string, color: string) {
   return new Style({
@@ -60,6 +60,7 @@ export function Map2D({
   region,
   layers,
   coverage,
+  environmentalLayers,
   start,
   destination,
   stop,
@@ -100,9 +101,10 @@ export function Map2D({
     for (const id of layerOrder) {
       rasterLayers[id] = new TileLayer({
         source: new XYZ({
-          url: region.layers[id],
+          url: id === "shade" || id === "thermal" ? environmentalLayers[id] : region.layers[id],
           projection,
           tileGrid,
+          crossOrigin: "anonymous",
           // Imagery may provide more pixels for the same geographic tile.
           tilePixelRatio: id === "imagery" ? (region.imageryPixelRatio ?? 1) : 1,
           wrapX: false,
@@ -218,6 +220,11 @@ export function Map2D({
     // Elevation can be viewed alone or blended over the visual basemap.
     layersRef.current.elevation?.setOpacity(layers.imagery ? 0.65 : 1);
   }, [region, layers, coverage]);
+
+  useEffect(() => {
+    layersRef.current.shade?.getSource()?.setUrl(environmentalLayers.shade);
+    layersRef.current.thermal?.getSource()?.setUrl(environmentalLayers.thermal);
+  }, [region, environmentalLayers.shade, environmentalLayers.thermal]);
 
   useEffect(() => {
     const overlay = overlayRef.current;

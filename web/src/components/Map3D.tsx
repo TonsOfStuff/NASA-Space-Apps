@@ -5,8 +5,6 @@ import {
   BufferGeometry,
   CanvasTexture,
   DoubleSide,
-  LineBasicMaterial,
-  LineSegments,
   NearestFilter,
   Plane,
   SRGBColorSpace,
@@ -14,8 +12,11 @@ import {
   Vector3,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
+import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 import { overviewZoom, pickTiles, type Selection, type Tile } from "../terrainLod";
-import type { LayerId, MapViewProps, MarsCoordinate, RegionManifest } from "../types";
+import type { EnvironmentalLayerId, LayerId, MapViewProps, MarsCoordinate, RegionManifest } from "../types";
 
 type Loaded = { z: number; tiles: Tile[]; data: Map<string, Float32Array | null> };
 type LodStatus = { zoom: number; loading: boolean; error: string | null };
@@ -23,8 +24,9 @@ type HeightLookup = { current: ((coordinate: MarsCoordinate) => number | null) |
 type Map3DProps = MapViewProps & { colorizeImagery: boolean };
 type RenderLayer = LayerId | "estimated" | "missing";
 type Edge = "north" | "south" | "west" | "east";
+type TerrainBounds = { left: number; right: number; north: number; south: number };
 
-const layerOrder: LayerId[] = ["imagery", "elevation", "slope", "coverage"];
+const layerOrder: LayerId[] = ["imagery", "elevation", "shade", "thermal", "slope", "coverage"];
 const terrainCache = new Map<string, Promise<Float32Array | null>>();
 const imageCache = new Map<string, Promise<HTMLImageElement | null>>();
 
@@ -71,9 +73,11 @@ function loadTerrain(region: RegionManifest, z: number, x: number, y: number): P
   });
 }
 
-function loadImage(region: RegionManifest, layer: RenderLayer, z: number, x: number, y: number): Promise<HTMLImageElement | null> {
+function loadImage(region: RegionManifest, layer: RenderLayer, z: number, x: number, y: number,
+                   environmentalLayers?: Record<EnvironmentalLayerId, string>): Promise<HTMLImageElement | null> {
   if (!inRegion(region, z, x, y)) return Promise.resolve(null);
-  const template = layer === "estimated" || layer === "missing" ? region.coverageLayers?.[layer] : region.layers[layer];
+  const template = layer === "estimated" || layer === "missing" ? region.coverageLayers?.[layer]
+    : layer === "shade" || layer === "thermal" ? environmentalLayers?.[layer] : region.layers[layer];
   if (!template) return Promise.resolve(null);
   const url = tileUrl(template, z, x, y);
   return cached(imageCache, url, 160, () => new Promise((resolve, reject) => {
@@ -200,7 +204,7 @@ function makeGeometry(region: RegionManifest, loaded: Loaded, tile: Tile, overvi
   return geometry;
 }
 
-function TileSurface({ region, loaded, tile, layers, coverage, activeTool, onPlace, onError, colorizeImagery, clipPlanes, stitchOverview = null }: Pick<MapViewProps, "region" | "layers" | "coverage" | "activeTool" | "onPlace"> & {
+function TileSurface({ region, loaded, tile, layers, coverage, environmentalLayers, activeTool, onPlace, onError, colorizeImagery, clipPlanes, stitchOverview = null }: Pick<MapViewProps, "region" | "layers" | "coverage" | "environmentalLayers" | "activeTool" | "onPlace"> & {
   loaded: Loaded; tile: Tile; onError: (message: string) => void; colorizeImagery: boolean; clipPlanes?: Plane[]; stitchOverview?: Loaded | null;
 }) {
   const hasTile = (x: number, y: number) => loaded.tiles.some((candidate) => candidate.x === x && candidate.y === y);
@@ -235,7 +239,7 @@ function TileSurface({ region, loaded, tile, layers, coverage, activeTool, onPla
     }
     Promise.all(enabled.map(async (layer) => ({
       layer,
-      images: await Promise.all(neighbours(tile).map(({ x, y }) => loadImage(region, layer, loaded.z, x, y))),
+      images: await Promise.all(neighbours(tile).map(({ x, y }) => loadImage(region, layer, loaded.z, x, y, environmentalLayers))),
     }))).then((entries) => {
       if (cancelled) return;
       const size = region.tileSize;
@@ -285,7 +289,7 @@ function TileSurface({ region, loaded, tile, layers, coverage, activeTool, onPla
       setMap(created);
     }).catch(() => { if (!cancelled) onError("Some visible map layer tiles could not be loaded."); });
     return () => { cancelled = true; created?.dispose(); };
-  }, [region, loaded.z, tile.x, tile.y, layers.imagery, layers.elevation, layers.slope, layers.coverage, coverage.estimated, coverage.missing, colorizeImagery, onError]);
+  }, [region, loaded.z, tile.x, tile.y, layers.imagery, layers.elevation, layers.shade, layers.thermal, layers.slope, layers.coverage, coverage.estimated, coverage.missing, environmentalLayers.shade, environmentalLayers.thermal, colorizeImagery, onError]);
 
   const onClick = (event: ThreeEvent<MouseEvent>) => {
     if (!activeTool) return;
@@ -347,33 +351,61 @@ function Markers({ region, loaded, overview, start, destination, stop }: Pick<Ma
   })}</>;
 }
 
-function RouteLine({ region, loaded, overview, route }: Pick<MapViewProps, "region" | "route"> & { loaded: Loaded; overview: Loaded | null }) {
-  const line = useMemo(() => {
+function RouteLine({ region, loaded, overview, route, detailBounds, overviewVisible }: Pick<MapViewProps, "region" | "route"> & {
+  loaded: Loaded; overview: Loaded | null; detailBounds: TerrainBounds | null; overviewVisible: boolean;
+}) {
+  const lines = useMemo(() => {
     const positions: number[] = [];
     const step = region.resolutions[loaded.z] / 2;
     const diagonal = Math.hypot(region.extent[2] - region.extent[0], region.extent[3] - region.extent[1]);
     let last: [number, number, number] | null = null;
-    for (let i = 0; i < route.length; i++) {
-      const from = route[Math.max(0, i - 1)], to = route[i];
+
+    const addPoint = (coordinate: MarsCoordinate) => {
+      const [x, , z] = toScene(region, coordinate, 0);
+      const inDetail = detailBounds && x >= detailBounds.left && x <= detailBounds.right &&
+        z >= detailBounds.north && z <= detailBounds.south;
+      // The detailed tile data also contains a halo for interpolation. Outside
+      // the rendered detail area, sample the visible overview instead.
+      const surface = inDetail ? loaded : overviewVisible ? overview : null;
+      const height = surface && heightAt(surface, region, coordinate);
+      if (height === null) { last = null; return; }
+      const point = toScene(region, coordinate, height + step * 0.2);
+      if (last) positions.push(...last, ...point);
+      last = point;
+    };
+
+    if (route.length) addPoint(route[0]);
+    for (let i = 1; i < route.length; i++) {
+      const from = route[i - 1], to = route[i];
       const distance = Math.hypot(to[0] - from[0], to[1] - from[1]);
       if (!Number.isFinite(distance) || distance > diagonal * 2) { last = null; continue; }
+      if (distance === 0) continue;
       const count = Math.max(1, Math.ceil(distance / step));
-      for (let n = i === 0 ? 0 : 1; n <= count; n++) {
+      for (let n = 1; n <= count; n++) {
         const t = n / count;
         const coordinate: MarsCoordinate = [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t];
-        const height = heightAt(loaded, region, coordinate) ?? (overview && heightAt(overview, region, coordinate));
-        if (height === null) { last = null; continue; }
-        const point = toScene(region, coordinate, height + step * 0.2);
-        if (last) positions.push(...last, ...point);
-        last = point;
+        addPoint(coordinate);
       }
     }
-    const geometry = new BufferGeometry();
-    geometry.setAttribute("position", new BufferAttribute(new Float32Array(positions), 3));
-    return new LineSegments(geometry, new LineBasicMaterial({ color: "#00d9ec" }));
-  }, [region, loaded, overview, route]);
-  useEffect(() => () => { line.geometry.dispose(); (line.material as LineBasicMaterial).dispose(); }, [line]);
-  return <primitive object={line} />;
+    if (!positions.length) return null;
+    const geometry = new LineSegmentsGeometry().setPositions(positions);
+    // Screen-space widths stay legible as the camera zooms; the dark casing
+    // keeps the cyan route distinct from both light and dark terrain. The
+    // depth bias prevents flickering where the line lies close to the surface.
+    const materialOptions = { depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 };
+    const outline = new LineSegments2(geometry, new LineMaterial({ ...materialOptions, color: "#0e191f", linewidth: 9 }));
+    const center = new LineSegments2(geometry, new LineMaterial({ ...materialOptions, color: "#59dbed", linewidth: 5 }));
+    outline.renderOrder = 1;
+    center.renderOrder = 2;
+    return { geometry, outline, center };
+  }, [region, loaded, overview, route, detailBounds, overviewVisible]);
+  useEffect(() => () => {
+    if (!lines) return;
+    lines.geometry.dispose();
+    lines.outline.material.dispose();
+    lines.center.material.dispose();
+  }, [lines]);
+  return lines && <><primitive object={lines.outline} /><primitive object={lines.center} /></>;
 }
 
 function CameraControls({ region, onSelection, reset, heightLookup }: { region: RegionManifest; onSelection: (selection: Selection) => void; reset: number; heightLookup: HeightLookup }) {
@@ -488,8 +520,8 @@ function TerrainTiles(props: Map3DProps & { selection: Selection | null; onStatu
       : null;
     return () => { props.heightLookup.current = null; };
   }, [loaded, overview, region, props.heightLookup]);
-  const clipPlanes = useMemo(() => {
-    if (!loaded || !overview || loaded.z <= overview.z || !loaded.tiles.length) return undefined;
+  const detailBounds = useMemo(() => {
+    if (!loaded?.tiles.length) return null;
     const resolution = region.resolutions[loaded.z];
     const span = region.tileSize * resolution;
     const minX = Math.min(...loaded.tiles.map((tile) => tile.x));
@@ -501,25 +533,31 @@ function TerrainTiles(props: Map3DProps & { selection: Selection | null; onStatu
     const right = left + (maxX - minX + 1) * span;
     const north = (region.extent[1] + region.extent[3]) / 2 - region.extent[3] + minY * span + resolution / 2;
     const south = north + (maxY - minY + 1) * span;
+    return { left, right, north, south };
+  }, [loaded, region]);
+  const clipPlanes = useMemo(() => {
+    if (!loaded || !overview || loaded.z <= overview.z || !detailBounds) return undefined;
+    const { left, right, north, south } = detailBounds;
     // With clipIntersection, the backdrop is discarded only inside all four
     // planes, leaving exactly one terrain surface at each location.
     return [new Plane(new Vector3(-1, 0, 0), left), new Plane(new Vector3(1, 0, 0), -right),
       new Plane(new Vector3(0, 0, -1), north), new Plane(new Vector3(0, 0, 1), -south)];
-  }, [loaded, overview, region]);
+  }, [loaded, overview, detailBounds]);
   if (!loaded) return null;
   return <>
     {overview && clipPlanes && overview.tiles.map((tile) => <TileSurface key={`overview/${overview.z}/${tile.x}/${tile.y}`}
-      region={region} loaded={overview} tile={tile} layers={props.layers} coverage={props.coverage} activeTool={props.activeTool} onPlace={props.onPlace}
+      region={region} loaded={overview} tile={tile} layers={props.layers} coverage={props.coverage} environmentalLayers={props.environmentalLayers} activeTool={props.activeTool} onPlace={props.onPlace}
       onError={onError} colorizeImagery={props.colorizeImagery} clipPlanes={clipPlanes} />)}
     {loaded.tiles.map((tile) => <TileSurface key={`${loaded.z}/${tile.x}/${tile.y}`} region={region} loaded={loaded}
-      tile={tile} layers={props.layers} coverage={props.coverage} activeTool={props.activeTool} onPlace={props.onPlace} onError={onError}
+      tile={tile} layers={props.layers} coverage={props.coverage} environmentalLayers={props.environmentalLayers} activeTool={props.activeTool} onPlace={props.onPlace} onError={onError}
       colorizeImagery={props.colorizeImagery} stitchOverview={clipPlanes ? overview : null} />)}
     {props.layers.coverage && props.coverage.missing && region.coverageLayers && <>
       {overview && clipPlanes && overview.tiles.map((tile) => <MissingSurface key={`missing-overview/${overview.z}/${tile.x}/${tile.y}`} region={region} loaded={overview} tile={tile} clipPlanes={clipPlanes} />)}
       {loaded.tiles.map((tile) => <MissingSurface key={`missing/${loaded.z}/${tile.x}/${tile.y}`} region={region} loaded={loaded} tile={tile} />)}
     </>}
     <Markers region={region} loaded={loaded} overview={overview} start={props.start} destination={props.destination} stop={props.stop} />
-    <RouteLine region={region} loaded={loaded} overview={overview} route={props.route} />
+    <RouteLine region={region} loaded={loaded} overview={overview} route={props.route}
+      detailBounds={detailBounds} overviewVisible={!!clipPlanes} />
   </>;
 }
 
