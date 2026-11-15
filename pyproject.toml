@@ -10,6 +10,7 @@ requires-python = ">=3.14"
 dependencies = [
     "argparse>=1.4.0",
     "matplotlib>=3.11.2",
+    "numba>=0.68.1",
     "numpy>=2.5.4",
     "pathlib>=1.0.1",
     "rasterio>=1.5.2",

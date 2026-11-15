@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.env.local
+# Generated from the local Mars rasters; regenerate with scripts/prepare_gale.py.
+public/data/gale/tiles/

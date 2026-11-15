@@ -1,0 +1,90 @@
+{
+  "id": "gale",
+  "name": "Gale region",
+  "projection": "MARS:GALE",
+  "proj4": "+proj=eqc +lat_ts=0 +lat_0=0 +lon_0=180 +x_0=0 +y_0=0 +R=3396190 +units=m +no_defs",
+  "extent": [
+    -2586424.3551795,
+    -419175.65207533067,
+    -2393247.852183986,
+    -214526.32230717
+  ],
+  "width": 9547,
+  "height": 10114,
+  "pixelSize": [
+    20.234262385619967,
+    20.23426238562
+  ],
+  "tileSize": 256,
+  "minZoom": 0,
+  "maxZoom": 6,
+  "resolutions": [
+    1294.992792679678,
+    647.496396339839,
+    323.7481981699195,
+    161.87409908495974,
+    80.93704954247987,
+    40.468524771239935,
+    20.234262385619967
+  ],
+  "imageryPixelRatio": 2,
+  "layers": {
+    "imagery": "/data/gale/tiles/imagery/{z}/{x}/{y}.png",
+    "elevation": "/data/gale/tiles/elevation/{z}/{x}/{y}.png",
+    "slope": "/data/gale/tiles/slope/{z}/{x}/{y}.png",
+    "coverage": "/data/gale/tiles/coverage/{z}/{x}/{y}.png"
+  },
+  "terrain": "/data/gale/tiles/terrain/{z}/{x}/{y}.f32",
+  "terrainEncoding": {
+    "dataType": "float32",
+    "byteOrder": "little",
+    "rowOrder": "north-to-south",
+    "noData": "NaN",
+    "verticalUnits": "Unverified; source documentation required"
+  },
+  "elevationRange": [
+    -4720.08935546875,
+    1528.35986328125
+  ],
+  "slopeLegend": {
+    "minimumDegrees": 0,
+    "maximumDegrees": 30,
+    "maximumIsClamped": true
+  },
+  "coverage": {
+    "validElevationPixels": 74496505,
+    "originalElevationPixels": 74492263,
+    "interpolatedElevationPixels": 4242,
+    "totalPixels": 96558358,
+    "imageryNoDataMaskPresent": false,
+    "legend": {
+      "source": "transparent",
+      "interpolated": [
+        73,
+        144,
+        216,
+        200
+      ],
+      "missing": [
+        231,
+        148,
+        47,
+        190
+      ]
+    }
+  },
+  "sources": {
+    "elevation": "gale_20m_interpolated.tif",
+    "imagery": "curiosity_ctx_mosaic.tif",
+    "provenance": "gale_20m_interpolated_provenance.tif"
+  },
+  "notes": [
+    "Native elevation spacing is approximately 20.23 projected metres per pixel; zoomed-out levels are coarser averages and cannot resolve smaller hazards.",
+    "Low-resolution cells are unknown if any contributing elevation cell is missing; otherwise they are marked estimated if any contributor was estimated. Coverage outside the available DEM extent is unknown.",
+    "The imagery and elevation use different Mars reference systems; their feature registration has not been verified.",
+    "Imagery has no declared NoData mask; alpha identifies its footprint only, not confirmed valid imagery.",
+    "Elevation vertical units and datum require verification against source documentation.",
+    "Slope is an approximate derivative of the current zoom level and does not establish traversability.",
+    "Blue indicates an interpolated elevation estimate; amber indicates missing elevation. Transparent cells use original valid source elevation."
+  ]
+}
