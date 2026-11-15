@@ -10,6 +10,12 @@ export interface RouteRequest {
   start: MarsCoordinate;
   destination: MarsCoordinate;
   rover: { maxSlopeDeg: number };
+  /** Mission-relative sol and the local solar clock at the starting point. */
+  marsDateTime?: {
+    sol: number;
+    localSolarTime: string;
+    solReference: "mission";
+  };
 }
 
 export interface RouteResult {

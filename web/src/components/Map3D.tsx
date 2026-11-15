@@ -9,21 +9,20 @@ import {
   LineSegments,
   NearestFilter,
   Plane,
-  Raycaster,
   SRGBColorSpace,
-  Vector2,
+  Texture,
   Vector3,
-  type Camera,
-  type PerspectiveCamera,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { overviewZoom, pickTiles, type Selection, type Tile } from "../terrainLod";
 import type { LayerId, MapViewProps, MarsCoordinate, RegionManifest } from "../types";
 
-type Tile = { x: number; y: number };
-type Selection = { z: number; tiles: Tile[]; key: string };
 type Loaded = { z: number; tiles: Tile[]; data: Map<string, Float32Array | null> };
 type LodStatus = { zoom: number; loading: boolean; error: string | null };
 type HeightLookup = { current: ((coordinate: MarsCoordinate) => number | null) | null };
+type Map3DProps = MapViewProps & { colorizeImagery: boolean };
+type RenderLayer = LayerId | "estimated" | "missing";
+type Edge = "north" | "south" | "west" | "east";
 
 const layerOrder: LayerId[] = ["imagery", "elevation", "slope", "coverage"];
 const terrainCache = new Map<string, Promise<Float32Array | null>>();
@@ -72,9 +71,11 @@ function loadTerrain(region: RegionManifest, z: number, x: number, y: number): P
   });
 }
 
-function loadImage(region: RegionManifest, layer: LayerId, z: number, x: number, y: number): Promise<HTMLImageElement | null> {
+function loadImage(region: RegionManifest, layer: RenderLayer, z: number, x: number, y: number): Promise<HTMLImageElement | null> {
   if (!inRegion(region, z, x, y)) return Promise.resolve(null);
-  const url = tileUrl(region.layers[layer], z, x, y);
+  const template = layer === "estimated" || layer === "missing" ? region.coverageLayers?.[layer] : region.layers[layer];
+  if (!template) return Promise.resolve(null);
+  const url = tileUrl(template, z, x, y);
   return cached(imageCache, url, 160, () => new Promise((resolve, reject) => {
     const image = new Image();
     image.crossOrigin = "anonymous";
@@ -120,13 +121,14 @@ function toScene(region: RegionManifest, [x, y]: MarsCoordinate, height: number)
     (region.extent[1] + region.extent[3]) / 2 - y];
 }
 
-function makeGeometry(region: RegionManifest, loaded: Loaded, tile: Tile): BufferGeometry {
+function makeGeometry(region: RegionManifest, loaded: Loaded, tile: Tile, overview: Loaded | null, edges: Edge[]): BufferGeometry {
   const size = region.tileSize;
   const side = size + 1;
   const resolution = region.resolutions[loaded.z];
-  const positions = new Float32Array(side * side * 3);
-  const uvs = new Float32Array(side * side * 2);
-  const normals = new Float32Array(side * side * 3);
+  const vertexCount = side * side + edges.length * side;
+  const positions = new Float32Array(vertexCount * 3);
+  const uvs = new Float32Array(vertexCount * 2);
+  const normals = new Float32Array(vertexCount * 3);
   const valid = new Uint8Array(side * side);
   const indices: number[] = [];
   for (let row = 0; row < side; row++) {
@@ -162,6 +164,34 @@ function makeGeometry(region: RegionManifest, loaded: Loaded, tile: Tile): Buffe
     if (valid[a] && valid[b] && valid[c]) indices.push(a, c, b);
     if (valid[b] && valid[c] && valid[d]) indices.push(b, c, d);
   }
+  // Join the detailed edge to the coarse surface at the same coordinates.
+  // The two grids average heights differently, so a vertical strip prevents
+  // cracks without overlapping the two terrain surfaces.
+  if (overview) edges.forEach((edge, edgeIndex) => {
+    const edgeValid = new Uint8Array(side);
+    const base = side * side + edgeIndex * side;
+    const edgeVertex = (offset: number) => edge === "north" ? offset : edge === "south" ? size * side + offset
+      : edge === "west" ? offset * side : offset * side + size;
+    for (let offset = 0; offset < side; offset++) {
+      const source = edgeVertex(offset);
+      const dest = base + offset;
+      const col = source % side, row = Math.floor(source / side);
+      const x = region.extent[0] + (tile.x * size + col + 0.5) * resolution;
+      const y = region.extent[3] - (tile.y * size + row + 0.5) * resolution;
+      const coarseHeight = valid[source] ? heightAt(overview, region, [x, y]) : null;
+      edgeValid[offset] = coarseHeight === null ? 0 : 1;
+      positions[dest * 3] = positions[source * 3];
+      positions[dest * 3 + 1] = coarseHeight === null ? positions[source * 3 + 1] : coarseHeight - region.elevationRange[0];
+      positions[dest * 3 + 2] = positions[source * 3 + 2];
+      normals.set(normals.subarray(source * 3, source * 3 + 3), dest * 3);
+      uvs.set(uvs.subarray(source * 2, source * 2 + 2), dest * 2);
+    }
+    for (let offset = 0; offset < size; offset++) {
+      if (!edgeValid[offset] || !edgeValid[offset + 1]) continue;
+      const a = edgeVertex(offset), b = edgeVertex(offset + 1), c = base + offset, d = c + 1;
+      indices.push(a, c, b, b, c, d);
+    }
+  });
   const geometry = new BufferGeometry();
   geometry.setAttribute("position", new BufferAttribute(positions, 3));
   geometry.setAttribute("uv", new BufferAttribute(uvs, 2));
@@ -170,17 +200,39 @@ function makeGeometry(region: RegionManifest, loaded: Loaded, tile: Tile): Buffe
   return geometry;
 }
 
-function TileSurface({ region, loaded, tile, layers, activeTool, onPlace, onError }: Pick<MapViewProps, "region" | "layers" | "activeTool" | "onPlace"> & {
-  loaded: Loaded; tile: Tile; onError: (message: string) => void;
+function TileSurface({ region, loaded, tile, layers, coverage, activeTool, onPlace, onError, colorizeImagery, clipPlanes, stitchOverview = null }: Pick<MapViewProps, "region" | "layers" | "coverage" | "activeTool" | "onPlace"> & {
+  loaded: Loaded; tile: Tile; onError: (message: string) => void; colorizeImagery: boolean; clipPlanes?: Plane[]; stitchOverview?: Loaded | null;
 }) {
-  const geometry = useMemo(() => makeGeometry(region, loaded, tile), [region, loaded, tile]);
+  const hasTile = (x: number, y: number) => loaded.tiles.some((candidate) => candidate.x === x && candidate.y === y);
+  const stitchNorth = !!stitchOverview && !hasTile(tile.x, tile.y - 1);
+  const stitchSouth = !!stitchOverview && !hasTile(tile.x, tile.y + 1);
+  const stitchWest = !!stitchOverview && !hasTile(tile.x - 1, tile.y);
+  const stitchEast = !!stitchOverview && !hasTile(tile.x + 1, tile.y);
+  // A changed view can add or remove tiles at the same level. Keep the
+  // geometry for tiles whose surrounding elevation samples are unchanged.
+  const geometry = useMemo(() => makeGeometry(region, loaded, tile, stitchOverview,
+    ([stitchNorth && "north", stitchSouth && "south", stitchWest && "west", stitchEast && "east"] as const)
+      .filter((edge): edge is Edge => !!edge)), [
+    region, loaded.z, tile.x, tile.y, stitchOverview, stitchNorth, stitchSouth, stitchWest, stitchEast,
+    loaded.data.get(tileKey(tile.x - 1, tile.y - 1)), loaded.data.get(tileKey(tile.x, tile.y - 1)), loaded.data.get(tileKey(tile.x + 1, tile.y - 1)),
+    loaded.data.get(tileKey(tile.x - 1, tile.y)), loaded.data.get(tileKey(tile.x, tile.y)), loaded.data.get(tileKey(tile.x + 1, tile.y)),
+    loaded.data.get(tileKey(tile.x - 1, tile.y + 1)), loaded.data.get(tileKey(tile.x, tile.y + 1)), loaded.data.get(tileKey(tile.x + 1, tile.y + 1)),
+  ]);
   const [map, setMap] = useState<CanvasTexture | null>(null);
   useEffect(() => () => geometry.dispose(), [geometry]);
 
   useEffect(() => {
     let cancelled = false;
     let created: CanvasTexture | null = null;
-    const enabled = layerOrder.filter((layer) => layers[layer]);
+    const enabled: RenderLayer[] = layerOrder.filter((layer) => layers[layer] && layer !== "coverage");
+    if (layers.coverage) {
+      if (region.coverageLayers) {
+        if (coverage.estimated) enabled.push("estimated");
+        if (coverage.missing) enabled.push("missing");
+      } else {
+        enabled.push("coverage");
+      }
+    }
     Promise.all(enabled.map(async (layer) => ({
       layer,
       images: await Promise.all(neighbours(tile).map(({ x, y }) => loadImage(region, layer, loaded.z, x, y))),
@@ -200,7 +252,7 @@ function TileSurface({ region, loaded, tile, layers, activeTool, onPlace, onErro
       context.fillRect(0, 0, canvas.width, canvas.height);
       entries.forEach(({ layer, images: [main, east, south, corner] }) => {
         context.globalAlpha = layer === "elevation" && layers.imagery ? 0.65 : 1;
-        context.imageSmoothingEnabled = layer !== "coverage";
+        context.imageSmoothingEnabled = layer !== "coverage" && layer !== "estimated" && layer !== "missing";
         if (main) context.drawImage(main, 0, 0, outputSize, outputSize);
         if (east) {
           const inputRatio = east.naturalWidth / size;
@@ -212,10 +264,19 @@ function TileSurface({ region, loaded, tile, layers, activeTool, onPlace, onErro
         }
         if (corner) context.drawImage(corner, 0, 0, corner.naturalWidth / size, corner.naturalHeight / size,
           outputSize, outputSize, ratio, ratio);
+        if (layer === "imagery" && colorizeImagery) {
+          // CTX is monochrome. A soft-light tint keeps its shadows and surface
+          // detail visible; later data layers retain their original colors.
+          context.globalAlpha = 1;
+          context.globalCompositeOperation = "soft-light";
+          context.fillStyle = "#ee9d68";
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          context.globalCompositeOperation = "source-over";
+        }
       });
       created = new CanvasTexture(canvas);
       created.colorSpace = SRGBColorSpace;
-      if (layers.coverage) {
+      if (layers.coverage && (!region.coverageLayers || coverage.estimated || coverage.missing)) {
         // Coverage is categorical; interpolating it can suggest coverage where
         // the source reports unknown terrain.
         created.magFilter = NearestFilter;
@@ -224,27 +285,60 @@ function TileSurface({ region, loaded, tile, layers, activeTool, onPlace, onErro
       setMap(created);
     }).catch(() => { if (!cancelled) onError("Some visible map layer tiles could not be loaded."); });
     return () => { cancelled = true; created?.dispose(); };
-  }, [region, loaded.z, tile, layers.imagery, layers.elevation, layers.slope, layers.coverage, onError]);
+  }, [region, loaded.z, tile.x, tile.y, layers.imagery, layers.elevation, layers.slope, layers.coverage, coverage.estimated, coverage.missing, colorizeImagery, onError]);
 
   const onClick = (event: ThreeEvent<MouseEvent>) => {
     if (!activeTool) return;
+    // Three's raycaster does not apply material clipping. Ignore backdrop hits
+    // inside the clipped area so the detailed terrain can receive the click.
+    if (clipPlanes?.every((plane) => plane.distanceToPoint(event.point) < 0)) return;
     event.stopPropagation();
     const [left, bottom, right, top] = region.extent;
     onPlace(activeTool, [event.point.x + (left + right) / 2, (top + bottom) / 2 - event.point.z]);
   };
   return <mesh geometry={geometry} onClick={onClick}>
-    <meshStandardMaterial color={map ? "#ffffff" : "#a9998e"} map={map} roughness={1} metalness={0} side={DoubleSide} />
+    {/* A material first rendered without a map needs a new shader when the
+        asynchronously loaded texture arrives. Remount it for that transition. */}
+    <meshStandardMaterial key={map ? "textured" : "loading"} color={map ? "#ffffff" : "#a9998e"}
+      map={map} roughness={1} metalness={0} side={DoubleSide} clippingPlanes={clipPlanes} clipIntersection />
   </mesh>;
 }
 
-function Markers({ region, loaded, start, destination, stop }: Pick<MapViewProps, "region" | "start" | "destination" | "stop"> & { loaded: Loaded }) {
+/** Missing heights have no terrain mesh; mark their footprint on a flat plane. */
+function MissingSurface({ region, loaded, tile, clipPlanes }: { region: RegionManifest; loaded: Loaded; tile: Tile; clipPlanes?: Plane[] }) {
+  const [texture, setTexture] = useState<Texture | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let created: Texture | null = null;
+    void loadImage(region, "missing", loaded.z, tile.x, tile.y).then((image) => {
+      if (cancelled || !image) return;
+      created = new Texture(image);
+      created.colorSpace = SRGBColorSpace;
+      created.magFilter = NearestFilter;
+      created.minFilter = NearestFilter;
+      created.needsUpdate = true;
+      setTexture(created);
+    }).catch(() => { if (!cancelled) setTexture(null); });
+    return () => { cancelled = true; created?.dispose(); };
+  }, [region, loaded.z, tile.x, tile.y]);
+  if (!texture) return null;
+  const span = region.resolutions[loaded.z] * region.tileSize;
+  const x = region.extent[0] + (tile.x + .5) * span - (region.extent[0] + region.extent[2]) / 2;
+  const z = (region.extent[1] + region.extent[3]) / 2 - region.extent[3] + (tile.y + .5) * span;
+  return <mesh position={[x, -1, z]} rotation={[-Math.PI / 2, 0, 0]}>
+    <planeGeometry args={[span, span]} />
+    <meshBasicMaterial map={texture} transparent depthWrite={false} side={DoubleSide} clippingPlanes={clipPlanes} clipIntersection />
+  </mesh>;
+}
+
+function Markers({ region, loaded, overview, start, destination, stop }: Pick<MapViewProps, "region" | "start" | "destination" | "stop"> & { loaded: Loaded; overview: Loaded | null }) {
   const resolution = region.resolutions[loaded.z];
   const radius = resolution * 2;
   return <>{([
     ["start", start, "#147bdb"], ["destination", destination, "#f15e4a"], ["stop", stop, "#eaa24d"],
   ] as const).map(([name, coordinate, color]) => {
     if (!coordinate) return null;
-    const height = heightAt(loaded, region, coordinate);
+    const height = heightAt(loaded, region, coordinate) ?? (overview && heightAt(overview, region, coordinate));
     if (height === null) return null;
     const [x, y, z] = toScene(region, coordinate, height);
     return <mesh key={name} position={[x, y + radius, z]}>
@@ -253,7 +347,7 @@ function Markers({ region, loaded, start, destination, stop }: Pick<MapViewProps
   })}</>;
 }
 
-function RouteLine({ region, loaded, route }: Pick<MapViewProps, "region" | "route"> & { loaded: Loaded }) {
+function RouteLine({ region, loaded, overview, route }: Pick<MapViewProps, "region" | "route"> & { loaded: Loaded; overview: Loaded | null }) {
   const line = useMemo(() => {
     const positions: number[] = [];
     const step = region.resolutions[loaded.z] / 2;
@@ -267,7 +361,7 @@ function RouteLine({ region, loaded, route }: Pick<MapViewProps, "region" | "rou
       for (let n = i === 0 ? 0 : 1; n <= count; n++) {
         const t = n / count;
         const coordinate: MarsCoordinate = [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t];
-        const height = heightAt(loaded, region, coordinate);
+        const height = heightAt(loaded, region, coordinate) ?? (overview && heightAt(overview, region, coordinate));
         if (height === null) { last = null; continue; }
         const point = toScene(region, coordinate, height + step * 0.2);
         if (last) positions.push(...last, ...point);
@@ -277,58 +371,16 @@ function RouteLine({ region, loaded, route }: Pick<MapViewProps, "region" | "rou
     const geometry = new BufferGeometry();
     geometry.setAttribute("position", new BufferAttribute(new Float32Array(positions), 3));
     return new LineSegments(geometry, new LineBasicMaterial({ color: "#00d9ec" }));
-  }, [region, loaded, route]);
+  }, [region, loaded, overview, route]);
   useEffect(() => () => { line.geometry.dispose(); (line.material as LineBasicMaterial).dispose(); }, [line]);
   return <primitive object={line} />;
-}
-
-function pickTiles(region: RegionManifest, camera: Camera, target: Vector3, heightPx: number): Selection {
-  const perspective = camera as PerspectiveCamera;
-  const distance = camera.position.distanceTo(target);
-  const groundPerPixel = 2 * distance * Math.tan((perspective.fov || 45) * Math.PI / 360) / Math.max(heightPx, 1);
-  let z = Math.max(region.minZoom, Math.min(region.maxZoom,
-    Math.round(Math.log2(region.resolutions[region.minZoom] / Math.max(groundPerPixel, 0.001)))));
-  const raycaster = new Raycaster();
-  const plane = new Plane(new Vector3(0, 1, 0), -target.y);
-  const points: Vector3[] = [];
-  camera.updateMatrixWorld();
-  for (const x of [-1, 1]) for (const y of [-1, 1]) {
-    raycaster.setFromCamera(new Vector2(x, y), camera);
-    const hit = raycaster.ray.intersectPlane(plane, new Vector3());
-    if (hit) points.push(hit);
-  }
-  points.push(target.clone());
-  if (points.length < 5) {
-    points.push(new Vector3(target.x - distance * 2, target.y, target.z - distance * 2));
-    points.push(new Vector3(target.x + distance * 2, target.y, target.z + distance * 2));
-  }
-  const centerX = (region.extent[0] + region.extent[2]) / 2;
-  const centerY = (region.extent[1] + region.extent[3]) / 2;
-  const minX = Math.min(...points.map((p) => p.x)) + centerX;
-  const maxX = Math.max(...points.map((p) => p.x)) + centerX;
-  const north = centerY - Math.min(...points.map((p) => p.z));
-  const south = centerY - Math.max(...points.map((p) => p.z));
-  const tilesAt = (level: number): Tile[] => {
-    const span = region.tileSize * region.resolutions[level];
-    const cols = Math.ceil((region.extent[2] - region.extent[0]) / span);
-    const rows = Math.ceil((region.extent[3] - region.extent[1]) / span);
-    const x0 = Math.max(0, Math.floor((minX - region.extent[0]) / span) - 1);
-    const x1 = Math.min(cols - 1, Math.floor((maxX - region.extent[0]) / span) + 1);
-    const y0 = Math.max(0, Math.floor((region.extent[3] - north) / span) - 1);
-    const y1 = Math.min(rows - 1, Math.floor((region.extent[3] - south) / span) + 1);
-    const result: Tile[] = [];
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) result.push({ x, y });
-    return result;
-  };
-  let tiles = tilesAt(z);
-  while (tiles.length > 16 && z > region.minZoom) tiles = tilesAt(--z);
-  return { z, tiles, key: `${z}:${tiles.map(({ x, y }) => `${x},${y}`).join(";")}` };
 }
 
 function CameraControls({ region, onSelection, reset, heightLookup }: { region: RegionManifest; onSelection: (selection: Selection) => void; reset: number; heightLookup: HeightLookup }) {
   const { camera, gl, size } = useThree();
   const controlsRef = useRef<OrbitControls | null>(null);
   const lastKey = useRef("");
+  const lastZoom = useRef<number | undefined>(undefined);
   const lastTime = useRef(0);
   useEffect(() => {
     const controls = new OrbitControls(camera, gl.domElement);
@@ -347,6 +399,7 @@ function CameraControls({ region, onSelection, reset, heightLookup }: { region: 
     controls.listenToKeyEvents(gl.domElement);
     controls.update();
     lastKey.current = "";
+    lastZoom.current = undefined;
     return () => { controlsRef.current = null; controls.dispose(); };
   }, [camera, gl, region, reset]);
   useFrame((state) => {
@@ -369,7 +422,8 @@ function CameraControls({ region, onSelection, reset, heightLookup }: { region: 
     }
     if (state.clock.elapsedTime - lastTime.current < 0.15) return;
     lastTime.current = state.clock.elapsedTime;
-    const selection = pickTiles(region, camera, controls.target, size.height);
+    const selection = pickTiles(region, camera, controls.target, size.height, lastZoom.current);
+    lastZoom.current = selection.z;
     if (selection.key !== lastKey.current) {
       lastKey.current = selection.key;
       onSelection(selection);
@@ -378,11 +432,28 @@ function CameraControls({ region, onSelection, reset, heightLookup }: { region: 
   return null;
 }
 
-function TerrainTiles(props: MapViewProps & { selection: Selection | null; onStatus: (status: LodStatus) => void; heightLookup: HeightLookup }) {
+function TerrainTiles(props: Map3DProps & { selection: Selection | null; onStatus: (status: LodStatus) => void; heightLookup: HeightLookup }) {
   const { region, selection, onStatus } = props;
   const [loaded, setLoaded] = useState<Loaded | null>(null);
+  const [overview, setOverview] = useState<Loaded | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
   const onError = useCallback((message: string) => setImageError(message), []);
+  useEffect(() => {
+    let cancelled = false;
+    const z = overviewZoom(region);
+    setOverview(null);
+    // A custom region may not provide a sufficiently coarse overview level.
+    if (z === null) return () => { cancelled = true; };
+    const span = region.tileSize * region.resolutions[z];
+    const cols = Math.ceil((region.extent[2] - region.extent[0]) / span);
+    const rows = Math.ceil((region.extent[3] - region.extent[1]) / span);
+    const tiles: Tile[] = [];
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) tiles.push({ x, y });
+    Promise.all(tiles.map(async (tile) => [tileKey(tile.x, tile.y), await loadTerrain(region, z, tile.x, tile.y)] as const))
+      .then((entries) => { if (!cancelled) setOverview({ z, tiles, data: new Map(entries) }); })
+      .catch(() => { if (!cancelled) onError("Overview terrain tiles could not be loaded."); });
+    return () => { cancelled = true; };
+  }, [region, onError]);
   useEffect(() => {
     if (!selection) return;
     let cancelled = false;
@@ -412,19 +483,47 @@ function TerrainTiles(props: MapViewProps & { selection: Selection | null; onSta
     if (imageError) onStatus({ zoom: loaded?.z ?? region.minZoom, loading: false, error: imageError });
   }, [imageError, loaded, onStatus, region.minZoom]);
   useEffect(() => {
-    props.heightLookup.current = loaded ? (coordinate) => heightAt(loaded, region, coordinate) : null;
+    props.heightLookup.current = loaded
+      ? (coordinate) => heightAt(loaded, region, coordinate) ?? (overview && heightAt(overview, region, coordinate))
+      : null;
     return () => { props.heightLookup.current = null; };
-  }, [loaded, region, props.heightLookup]);
+  }, [loaded, overview, region, props.heightLookup]);
+  const clipPlanes = useMemo(() => {
+    if (!loaded || !overview || loaded.z <= overview.z || !loaded.tiles.length) return undefined;
+    const resolution = region.resolutions[loaded.z];
+    const span = region.tileSize * resolution;
+    const minX = Math.min(...loaded.tiles.map((tile) => tile.x));
+    const maxX = Math.max(...loaded.tiles.map((tile) => tile.x));
+    const minY = Math.min(...loaded.tiles.map((tile) => tile.y));
+    const maxY = Math.max(...loaded.tiles.map((tile) => tile.y));
+    // The geometry begins at pixel centers, half a cell inside the tile grid.
+    const left = region.extent[0] - (region.extent[0] + region.extent[2]) / 2 + minX * span + resolution / 2;
+    const right = left + (maxX - minX + 1) * span;
+    const north = (region.extent[1] + region.extent[3]) / 2 - region.extent[3] + minY * span + resolution / 2;
+    const south = north + (maxY - minY + 1) * span;
+    // With clipIntersection, the backdrop is discarded only inside all four
+    // planes, leaving exactly one terrain surface at each location.
+    return [new Plane(new Vector3(-1, 0, 0), left), new Plane(new Vector3(1, 0, 0), -right),
+      new Plane(new Vector3(0, 0, -1), north), new Plane(new Vector3(0, 0, 1), -south)];
+  }, [loaded, overview, region]);
   if (!loaded) return null;
   return <>
+    {overview && clipPlanes && overview.tiles.map((tile) => <TileSurface key={`overview/${overview.z}/${tile.x}/${tile.y}`}
+      region={region} loaded={overview} tile={tile} layers={props.layers} coverage={props.coverage} activeTool={props.activeTool} onPlace={props.onPlace}
+      onError={onError} colorizeImagery={props.colorizeImagery} clipPlanes={clipPlanes} />)}
     {loaded.tiles.map((tile) => <TileSurface key={`${loaded.z}/${tile.x}/${tile.y}`} region={region} loaded={loaded}
-      tile={tile} layers={props.layers} activeTool={props.activeTool} onPlace={props.onPlace} onError={onError} />)}
-    <Markers region={region} loaded={loaded} start={props.start} destination={props.destination} stop={props.stop} />
-    <RouteLine region={region} loaded={loaded} route={props.route} />
+      tile={tile} layers={props.layers} coverage={props.coverage} activeTool={props.activeTool} onPlace={props.onPlace} onError={onError}
+      colorizeImagery={props.colorizeImagery} stitchOverview={clipPlanes ? overview : null} />)}
+    {props.layers.coverage && props.coverage.missing && region.coverageLayers && <>
+      {overview && clipPlanes && overview.tiles.map((tile) => <MissingSurface key={`missing-overview/${overview.z}/${tile.x}/${tile.y}`} region={region} loaded={overview} tile={tile} clipPlanes={clipPlanes} />)}
+      {loaded.tiles.map((tile) => <MissingSurface key={`missing/${loaded.z}/${tile.x}/${tile.y}`} region={region} loaded={loaded} tile={tile} />)}
+    </>}
+    <Markers region={region} loaded={loaded} overview={overview} start={props.start} destination={props.destination} stop={props.stop} />
+    <RouteLine region={region} loaded={loaded} overview={overview} route={props.route} />
   </>;
 }
 
-function Scene(props: MapViewProps & { reset: number; onStatus: (status: LodStatus) => void }) {
+function Scene(props: Map3DProps & { reset: number; onStatus: (status: LodStatus) => void }) {
   const [selection, setSelection] = useState<Selection | null>(null);
   const heightLookup = useRef<((coordinate: MarsCoordinate) => number | null) | null>(null);
   const span = Math.max(props.region.extent[2] - props.region.extent[0], props.region.extent[3] - props.region.extent[1]);
@@ -439,18 +538,20 @@ function Scene(props: MapViewProps & { reset: number; onStatus: (status: LodStat
   </>;
 }
 
-export default function Map3D(props: MapViewProps) {
+export default function Map3D(props: Map3DProps) {
   const [reset, setReset] = useState(0);
   const [status, setStatus] = useState<LodStatus>({ zoom: props.region.minZoom, loading: true, error: null });
   const resolution = props.region.resolutions[status.zoom];
+  const overviewLevel = overviewZoom(props.region);
   return <div style={{ width: "100%", height: "100%", position: "relative" }}>
     <Canvas tabIndex={0} aria-label="Interactive 3D terrain map. Drag to orbit, right drag or arrow keys to pan, and scroll to zoom."
-      camera={{ fov: 45 }} dpr={[1, 1.5]} fallback={<p>This device cannot display the 3D terrain. Please use the 2D map.</p>}>
+      camera={{ fov: 45 }} dpr={[1, 1.5]} onCreated={({ gl }) => { gl.localClippingEnabled = true; }}
+      fallback={<p>This device cannot display the 3D terrain. Please use the 2D map.</p>}>
       <Scene {...props} reset={reset} onStatus={setStatus} />
     </Canvas>
     <div className="terrain-lod-status" role="status" style={{ padding: "7px 10px", borderRadius: 10,
       background: "rgba(255,255,255,.92)", color: "#453d39", fontSize: 12, maxWidth: "70%", boxShadow: "0 2px 12px #382a221a" }}>
-      {status.error || (status.loading ? "Loading terrain tiles…" : `${status.zoom === props.region.maxZoom ? "Native" : "Coarse"} terrain grid · ${resolution.toFixed(0)} m/pixel${status.zoom < props.region.maxZoom ? " · zoom in for detail" : ""}`)}
+      {status.error || (status.loading ? "Loading terrain tiles…" : `${status.zoom === props.region.maxZoom ? "Native" : "Coarse"} terrain grid · ${resolution.toFixed(0)} m/pixel${overviewLevel !== null && status.zoom > overviewLevel ? " near center · distant terrain coarser" : ""}${status.zoom < props.region.maxZoom ? " · zoom in for detail" : ""}`)}
     </div>
     <button className="terrain-reset" type="button" onClick={() => setReset((value) => value + 1)} style={{
       border: 0, borderRadius: 10, padding: "8px 12px", background: "white", color: "#453d39", cursor: "pointer",

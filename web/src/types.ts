@@ -4,6 +4,7 @@ export type MarsCoordinate = [number, number];
 export type MarkerKind = "start" | "destination";
 export type LayerId = "imagery" | "elevation" | "slope" | "coverage";
 export type LayerVisibility = Record<LayerId, boolean>;
+export type CoverageVisibility = { estimated: boolean; missing: boolean };
 
 /** Source bounds and native pixel dimensions in a Mars-projected coordinate system. */
 export interface RegionManifest {
@@ -24,6 +25,8 @@ export interface RegionManifest {
   /** Imagery can contain more physical pixels than the shared tile grid. */
   imageryPixelRatio?: number;
   layers: Record<LayerId, string>;
+  /** Optional separately viewable masks for the coverage categories. */
+  coverageLayers?: { estimated: string; missing: string };
   /** URL template for little-endian Float32 terrain tiles; NaN means NoData. */
   terrain: string;
   notes: string[];
@@ -33,6 +36,7 @@ export interface RegionManifest {
 export interface MapViewProps {
   region: RegionManifest;
   layers: LayerVisibility;
+  coverage: CoverageVisibility;
   start: MarsCoordinate | null;
   destination: MarsCoordinate | null;
   stop: MarsCoordinate | null;

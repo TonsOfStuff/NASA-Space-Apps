@@ -40,6 +40,12 @@ class GaleProvenanceTests(unittest.TestCase):
             np.testing.assert_array_equal(native[0, 0], MISSING_RGBA)
             np.testing.assert_array_equal(native[0, 1], ESTIMATED_RGBA)
             np.testing.assert_array_equal(native[5, 5], [0, 0, 0, 0])
+            native_estimated = np.asarray(Image.open(tile_path(output, "coverage_estimated", 6, 0, 0, "png")))
+            native_missing = np.asarray(Image.open(tile_path(output, "coverage_missing", 6, 0, 0, "png")))
+            np.testing.assert_array_equal(native_estimated[0, 1], ESTIMATED_RGBA)
+            np.testing.assert_array_equal(native_estimated[0, 0], [0, 0, 0, 0])
+            np.testing.assert_array_equal(native_missing[0, 0], MISSING_RGBA)
+            np.testing.assert_array_equal(native_missing[0, 1], [0, 0, 0, 0])
             parent, _, estimated_parent = downsample_children(output, 5, 0, 0)
             self.assertTrue(np.isnan(parent[0, 0]))
             self.assertFalse(estimated_parent[0, 0])  # Missing outranks estimated.
@@ -49,6 +55,12 @@ class GaleProvenanceTests(unittest.TestCase):
             np.testing.assert_array_equal(parent_coverage[0, 0], MISSING_RGBA)
             np.testing.assert_array_equal(parent_coverage[1, 1], ESTIMATED_RGBA)
             np.testing.assert_array_equal(parent_coverage[2, 2], [0, 0, 0, 0])
+            parent_estimated = np.asarray(Image.open(tile_path(output, "coverage_estimated", 5, 0, 0, "png")))
+            parent_missing = np.asarray(Image.open(tile_path(output, "coverage_missing", 5, 0, 0, "png")))
+            np.testing.assert_array_equal(parent_estimated[0, 0], [0, 0, 0, 0])
+            np.testing.assert_array_equal(parent_missing[0, 0], MISSING_RGBA)
+            np.testing.assert_array_equal(parent_estimated[1, 1], ESTIMATED_RGBA)
+            np.testing.assert_array_equal(parent_missing[1, 1], [0, 0, 0, 0])
 
     def test_manifest_source_resolution_and_provenance_validation(self):
         with tempfile.TemporaryDirectory() as temp:

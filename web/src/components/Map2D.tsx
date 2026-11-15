@@ -59,6 +59,7 @@ const routeStyles = [
 export function Map2D({
   region,
   layers,
+  coverage,
   start,
   destination,
   stop,
@@ -70,6 +71,7 @@ export function Map2D({
   const mapRef = useRef<Map | null>(null);
   const overlayRef = useRef<VectorSource | null>(null);
   const layersRef = useRef<Partial<Record<LayerId, TileLayer<XYZ>>>>({});
+  const coverageRef = useRef<Partial<Record<"estimated" | "missing", TileLayer<XYZ>>>>({});
   const interactionRef = useRef({ activeTool, onPlace });
   interactionRef.current = { activeTool, onPlace };
 
@@ -110,12 +112,21 @@ export function Map2D({
         }),
       });
     }
+    const separateCoverage: Partial<Record<"estimated" | "missing", TileLayer<XYZ>>> = {};
+    if (region.coverageLayers) {
+      for (const category of ["estimated", "missing"] as const) {
+        separateCoverage[category] = new TileLayer({
+          source: new XYZ({ url: region.coverageLayers[category], projection, tileGrid, wrapX: false, transition: 0, interpolate: false }),
+        });
+      }
+    }
 
     const overlay = new VectorSource({ wrapX: false });
     const map = new Map({
       target,
       layers: [
         ...layerOrder.map((id) => rasterLayers[id]!),
+        ...(["estimated", "missing"] as const).flatMap((category) => separateCoverage[category] ? [separateCoverage[category]!] : []),
         new VectorLayer({ source: overlay }),
       ],
       view: new View({
@@ -137,6 +148,7 @@ export function Map2D({
     mapRef.current = map;
     overlayRef.current = overlay;
     layersRef.current = rasterLayers;
+    coverageRef.current = separateCoverage;
 
     const placeAt = (coordinate: number[]) => {
       const { activeTool: tool, onPlace: place } = interactionRef.current;
@@ -192,15 +204,20 @@ export function Map2D({
         mapRef.current = null;
         overlayRef.current = null;
         layersRef.current = {};
+        coverageRef.current = {};
       }
     };
   }, [region]);
 
   useEffect(() => {
     for (const id of layerOrder) layersRef.current[id]?.setVisible(layers[id]);
+    layersRef.current.coverage?.setVisible(layers.coverage && !region.coverageLayers);
+    for (const category of ["estimated", "missing"] as const) {
+      coverageRef.current[category]?.setVisible(layers.coverage && coverage[category]);
+    }
     // Elevation can be viewed alone or blended over the visual basemap.
     layersRef.current.elevation?.setOpacity(layers.imagery ? 0.65 : 1);
-  }, [region, layers]);
+  }, [region, layers, coverage]);
 
   useEffect(() => {
     const overlay = overlayRef.current;

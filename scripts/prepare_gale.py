@@ -218,6 +218,12 @@ def write_derived_images(output: Path, z: int, x: int, y: int, terrain: np.ndarr
     coverage[in_region & valid & estimated] = ESTIMATED_RGBA
     coverage[in_region & ~valid] = MISSING_RGBA
     save_image(output, "coverage", z, x, y, coverage)
+    estimated_mask = np.zeros_like(coverage)
+    estimated_mask[in_region & valid & estimated] = ESTIMATED_RGBA
+    missing_mask = np.zeros_like(coverage)
+    missing_mask[in_region & ~valid] = MISSING_RGBA
+    save_image(output, "coverage_estimated", z, x, y, estimated_mask)
+    save_image(output, "coverage_missing", z, x, y, missing_mask)
 
 
 def write_slopes(output: Path, dem: rasterio.io.DatasetReader) -> None:
@@ -307,16 +313,18 @@ def prepare(args: argparse.Namespace) -> None:
             "maxZoom": MAX_ZOOM, "resolutions": resolutions, "imageryPixelRatio": IMAGERY_RATIO,
             "layers": {layer: f"{base}/tiles/{layer}/{{z}}/{{x}}/{{y}}.png"
                        for layer in ("imagery", "elevation", "slope", "coverage")},
+            "coverageLayers": {category: f"{base}/tiles/coverage_{category}/{{z}}/{{x}}/{{y}}.png"
+                               for category in ("estimated", "missing")},
             "terrain": f"{base}/tiles/terrain/{{z}}/{{x}}/{{y}}.f32",
             "terrainEncoding": {"dataType": "float32", "byteOrder": "little", "rowOrder": "north-to-south",
                                 "noData": "NaN", "verticalUnits": "Unverified; source documentation required"},
             "elevationRange": [min_z, max_z],
             "slopeLegend": {"minimumDegrees": 0, "maximumDegrees": 30, "maximumIsClamped": True},
             "coverage": {"validElevationPixels": count, "originalElevationPixels": count - estimated_count if provenance is not None else None,
-                         "interpolatedElevationPixels": estimated_count if provenance is not None else None, "totalPixels": dem.width * dem.height,
+                         "estimatedElevationPixels": estimated_count if provenance is not None else None, "totalPixels": dem.width * dem.height,
                          "imageryNoDataMaskPresent": image_has_mask,
                          "legend": {"source": "transparent" if provenance is not None else "transparent; provenance unavailable",
-                                    "interpolated": list(ESTIMATED_RGBA), "missing": list(MISSING_RGBA)}},
+                                    "estimated": list(ESTIMATED_RGBA), "missing": list(MISSING_RGBA)}},
             "sources": {"elevation": args.dem.name, "imagery": args.imagery.name,
                         "provenance": provenance_path.name if provenance_path is not None else None},
             "notes": [
@@ -326,7 +334,7 @@ def prepare(args: argparse.Namespace) -> None:
                 image_note,
                 "Elevation vertical units and datum require verification against source documentation.",
                 "Slope is an approximate derivative of the current zoom level and does not establish traversability.",
-                ("Blue indicates an interpolated elevation estimate; amber indicates missing elevation. Transparent cells use original valid source elevation."
+                ("Blue indicates an interpolated or overlap-blended elevation estimate; amber indicates missing elevation. Transparent cells use original valid source elevation."
                  if provenance is not None else
                  "Amber indicates missing elevation. No provenance was supplied, so valid cells cannot be classified as original versus interpolated."),
             ],
@@ -342,8 +350,8 @@ def prepare(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dem", type=Path, default=ROOT / "src/spaceapps/data/gale_20m_interpolated.tif")
-    parser.add_argument("--provenance", type=Path, help="Optional 0=source, 1=interpolated, 2=missing GeoTIFF; defaults to the DEM's PROVENANCE tag when present")
+    parser.add_argument("--dem", type=Path, default=ROOT / "src/spaceapps/data/gale_20m_interpolated_feathered.tif")
+    parser.add_argument("--provenance", type=Path, help="Optional 0=source, 1=estimated, 2=missing GeoTIFF; defaults to the DEM's PROVENANCE tag when present")
     parser.add_argument("--imagery", type=Path, default=ROOT / "src/spaceapps/data/curiosity_ctx_mosaic.tif")
     parser.add_argument("--output", type=Path, default=ROOT / "web/public/data/gale")
     parser.add_argument("--asset-base", default="/data/gale")

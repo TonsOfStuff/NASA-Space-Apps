@@ -53,13 +53,13 @@
   },
   "coverage": {
     "validElevationPixels": 74496505,
-    "originalElevationPixels": 74492263,
-    "interpolatedElevationPixels": 4242,
+    "originalElevationPixels": 73407377,
+    "estimatedElevationPixels": 1089128,
     "totalPixels": 96558358,
     "imageryNoDataMaskPresent": false,
     "legend": {
       "source": "transparent",
-      "interpolated": [
+      "estimated": [
         73,
         144,
         216,
@@ -74,9 +74,9 @@
     }
   },
   "sources": {
-    "elevation": "gale_20m_interpolated.tif",
+    "elevation": "gale_20m_interpolated_feathered.tif",
     "imagery": "curiosity_ctx_mosaic.tif",
-    "provenance": "gale_20m_interpolated_provenance.tif"
+    "provenance": "gale_20m_interpolated_feathered_provenance.tif"
   },
   "notes": [
     "Native elevation spacing is approximately 20.23 projected metres per pixel; zoomed-out levels are coarser averages and cannot resolve smaller hazards.",
@@ -85,6 +85,10 @@
     "Imagery has no declared NoData mask; alpha identifies its footprint only, not confirmed valid imagery.",
     "Elevation vertical units and datum require verification against source documentation.",
     "Slope is an approximate derivative of the current zoom level and does not establish traversability.",
-    "Blue indicates an interpolated elevation estimate; amber indicates missing elevation. Transparent cells use original valid source elevation."
-  ]
+    "Blue indicates an interpolated or overlap-blended elevation estimate; amber indicates missing elevation. Transparent cells use original valid source elevation."
+  ],
+  "coverageLayers": {
+    "estimated": "/data/gale/tiles/coverage_estimated/{z}/{x}/{y}.png",
+    "missing": "/data/gale/tiles/coverage_missing/{z}/{x}/{y}.png"
+  }
 }

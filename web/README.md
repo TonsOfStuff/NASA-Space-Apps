@@ -1,10 +1,10 @@
-# Wayfinder frontend
+# MarMap frontend
 
-A React, TypeScript, OpenLayers and Three.js interface for the available Gale Crater imagery and elevation data. The map uses the DEM's own Mars-projected coordinates, supports imagery, elevation, slope and missing-elevation layers, and loads increasingly detailed tiles as you zoom. The 3D view uses the same terrain and imagery tiles.
+A React, TypeScript, OpenLayers and Three.js interface for the available Gale Crater imagery and elevation data. The map uses the DEM's own Mars-projected coordinates, supports imagery, elevation, slope and independently selectable estimated and missing data coverage, and loads increasingly detailed tiles as you zoom. The 3D view drapes the same imagery tiles over the terrain; missing areas appear on a flat marker plane because their heights are unknown. Its optional warm tint adds display color to the grayscale CTX imagery; turn it off under Layers to see the original tones. The tint does not represent measured surface color.
 
 ## Run locally
 
-Use Node.js 22.12 or newer. The source GeoTIFFs are not checked into Git. Place `gale_20m_mosaic.tif` in `src/spaceapps/` and `curiosity_ctx_mosaic.tif` in `src/spaceapps/data/`. The existing `merge_dtms.py` can build the elevation mosaic from the source DTM tiles. The frontend uses a separately interpolated mosaic and its provenance raster by default. See `scripts/prepare_gale.py --help` for alternate input and output paths.
+Use Node.js 22.12 or newer. The source GeoTIFFs are not checked into Git. Place `gale_20m_mosaic.tif` in `src/spaceapps/`, the original DTM tiles in `src/spaceapps/DTMs/`, and `curiosity_ctx_mosaic.tif` in `src/spaceapps/data/`. The existing `merge_dtms.py` can build the elevation mosaic from the source DTM tiles. The frontend uses a separately interpolated and overlap-blended mosaic and its provenance raster by default. See `scripts/prepare_gale.py --help` for alternate input and output paths.
 
 ```sh
 # From the repository root, after installing the Python dependencies.
@@ -12,6 +12,16 @@ Use Node.js 22.12 or newer. The source GeoTIFFs are not checked into Git. Place 
 .venv/bin/python scripts/interpolate_dem_gaps.py src/spaceapps/gale_20m_mosaic.tif \
   --output src/spaceapps/data/gale_20m_interpolated.tif \
   --provenance src/spaceapps/data/gale_20m_interpolated_provenance.tif
+
+# Blend the tile 3/4 overlap into another separate DEM:
+.venv/bin/python scripts/blend_dem_overlap.py src/spaceapps/data/gale_20m_interpolated.tif \
+  --provenance src/spaceapps/data/gale_20m_interpolated_provenance.tif \
+  --earlier src/spaceapps/DTMs/PG_Gale_CTX_3_3_AATE_20m.tif \
+  --later src/spaceapps/DTMs/PG_Gale_CTX_4_AATE_20m.tif \
+  --exclude src/spaceapps/DTMs/PG_Gale_CTX_1_AATE_20m.tif \
+  --exclude src/spaceapps/DTMs/PG_Gale_CTX_2_2_AATE_20m.tif \
+  --output src/spaceapps/data/gale_20m_interpolated_feathered.tif \
+  --output-provenance src/spaceapps/data/gale_20m_interpolated_feathered_provenance.tif
 
 # Then prepare the frontend tiles:
 .venv/bin/python scripts/prepare_gale.py
@@ -45,7 +55,8 @@ POST <VITE_ROUTE_API_URL>
   "regionId": "gale",
   "start": [-2494500, -316000],
   "destination": [-2493000, -315000],
-  "rover": { "maxSlopeDeg": 15 }
+  "rover": { "maxSlopeDeg": 15 },
+  "marsDateTime": { "sol": 42, "localSolarTime": "14:30", "solReference": "mission" }
 }
 ```
 
@@ -63,10 +74,10 @@ POST <VITE_ROUTE_API_URL>
 }
 ```
 
-Coordinates are `[easting, northing]` in the selected region's projected **Mars** CRS and are interpreted using the region manifest; they are not Earth coordinates. `status` is `reached`, `partial`, or `unreachable`. The backend can return `stop` as its selected parking point; the frontend does not choose it. `unreachable` uses an empty path. `distanceM`, evaluated points and resolution may be null when unavailable. If the backend evaluates cell centers rather than the exact selections, return those positions so the UI can disclose the displacement. Errors can use `{ "error": { "code": "...", "message": "..." } }` with a non-success HTTP status.
+Coordinates are `[easting, northing]` in the selected region's projected **Mars** CRS and are interpreted using the region manifest; they are not Earth coordinates. `marsDateTime` is optional: `sol` is a non-negative mission-relative sol and `localSolarTime` is a 24-hour `HH:MM` local solar clock at the start point. The frontend does not assign a mission epoch or convert these values to Earth time. The backend team should agree on the mission epoch and adapt the field names or time convention in `src/routeService.ts` if needed. `status` is `reached`, `partial`, or `unreachable`. The backend can return `stop` as its selected parking point; the frontend does not choose it. `unreachable` uses an empty path. `distanceM`, evaluated points and resolution may be null when unavailable. If the backend evaluates cell centers rather than the exact selections, return those positions so the UI can disclose the displacement. Errors can use `{ "error": { "code": "...", "message": "..." } }` with a non-success HTTP status.
 
 This format is an integration proposal; if your team chooses a different endpoint, wire format, or coordinate system, update the adapter to transform the service's data into the frontend types. It validates responses and cancels obsolete requests when the selection or rover settings change. Do not silently convert missing coverage into traversable terrain.
 
 ## Data limitations
 
-The available elevation mosaic has approximately 20.23 m projected source pixel spacing, and the available imagery has its own coverage limits. The default derived DEM fills 4,242 narrow-gap cells using surrounding heights; the provenance raster records which cells are estimated. Amber coverage marks remaining missing elevation and blue marks interpolated cells. Tiles shown at broader zoom levels are coarser; zooming beyond the native source resolution cannot reveal additional terrain detail. The source imagery and DEM have different Mars reference-system metadata and their feature alignment has not been verified. The source imagery lacks a declared NoData mask, and elevation vertical units and datum need source-documentation verification. Slope and 3D height are illustrative estimates, not safety assessments. A clear coverage cell does not mean the area is safe. The rectangular source footprint has not been verified to include every part of the crater.
+The available elevation mosaic has approximately 20.23 m projected source pixel spacing, and the available imagery has its own coverage limits. The default derived DEM fills 4,242 narrow-gap cells and blends 1,084,886 cells near the tile 3/4 overlap; the provenance raster records both as estimates. Amber coverage marks remaining missing elevation and blue marks estimated cells. Tiles shown at broader zoom levels are coarser; zooming beyond the native source resolution cannot reveal additional terrain detail. The source imagery and DEM have different Mars reference-system metadata and their feature alignment has not been verified. The source imagery lacks a declared NoData mask, and elevation vertical units and datum need source-documentation verification. Slope and 3D height are illustrative estimates, not safety assessments. A clear coverage cell does not mean the area is safe. The rectangular source footprint has not been verified to include every part of the crater.

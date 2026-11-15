@@ -57,6 +57,14 @@ button:disabled { cursor: not-allowed; }
 .range-label strong { color: #3b554a; font-size: 12px; }
 input[type="range"] { width: 100%; height: 4px; margin: 13px 0 0; accent-color: #3c7162; cursor: pointer; }
 .range-ends { display: flex; justify-content: space-between; padding-top: 6px; color: #aab1ab; font-size: 9px; }
+.mars-time-block { margin-top: 18px; padding: 16px 2px 0; border-top: 1px solid #e9ece8; }
+.mars-time-heading { display: flex; align-items: center; gap: 8px; color: #566b60; font-size: 12px; font-weight: 650; }
+.mars-time-heading svg { color: #82918a; }
+.mars-time-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+.mars-time-fields label { display: grid; gap: 5px; min-width: 0; color: #74847b; font-size: 10px; }
+.mars-time-fields input { width: 100%; min-width: 0; height: 36px; padding: 0 9px; border: 1px solid #e3e8e2; border-radius: 8px; background: #fff; color: #354640; font-size: 12px; }
+.mars-time-fields input::placeholder { color: #a5afa8; }
+.mars-time-error { display: block; margin-top: 7px; color: #a9664d; font-size: 10px; }
 .route-button { width: 100%; height: 46px; display: flex; justify-content: center; align-items: center; gap: 9px; margin-top: 18px; padding: 0 15px; border: 0; border-radius: 10px; background: #315d50; color: #fff; font-size: 12px; font-weight: 700; }
 .route-button svg:last-child { margin-left: auto; }
 .route-button:not(:disabled):hover { background: #23483e; }
@@ -104,8 +112,17 @@ input[type="range"] { width: 100%; height: 4px; margin: 13px 0 0; accent-color: 
 .layer-name strong { color: #44534b; font-size: 11px; }
 .layer-name small { color: #9aa69d; font-size: 9px; }
 .layer-row input { width: 15px; height: 15px; accent-color: #3d7561; }
-.coverage-legend { display: flex; gap: 15px; margin-top: 12px; color: #718078; font-size: 10px; }
-.coverage-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.imagery-tint-option { display: flex; align-items: center; gap: 10px; padding: 9px 0 9px 40px; border-bottom: 1px solid #edf0ec; color: #65776c; cursor: pointer; }
+.imagery-tint-option span { display: grid; flex: 1; gap: 3px; }
+.imagery-tint-option strong { font-size: 10px; }
+.imagery-tint-option small { color: #9aa69d; font-size: 9px; }
+.imagery-tint-option input { width: 15px; height: 15px; accent-color: #3d7561; }
+.coverage-options { display: grid; gap: 8px; padding: 10px 0 10px 40px; border-bottom: 1px solid #edf0ec; }
+.coverage-options > small { color: #8e9a92; font-size: 9px; line-height: 1.4; }
+.coverage-option { display: flex; align-items: center; gap: 8px; color: #65776c; font-size: 10px; cursor: pointer; }
+.coverage-option span { flex: 1; }
+.coverage-option input { width: 15px; height: 15px; accent-color: #3d7561; }
+.coverage-option:has(input:disabled) { opacity: .5; cursor: default; }
 .coverage-key { width: 9px; height: 9px; border-radius: 3px; }
 .coverage-missing { background: #e7942f; }
 .coverage-estimated { background: #4990d8; }

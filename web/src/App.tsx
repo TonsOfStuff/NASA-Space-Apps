@@ -1,8 +1,8 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { ArrowRight, Box, ChevronDown, CircleHelp, Compass, Layers3, LoaderCircle, Map as MapIcon, MapPin, Navigation, RotateCcw, Route, SlidersHorizontal, TriangleAlert, X } from "lucide-react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { ArrowRight, Box, ChevronDown, CircleHelp, Clock3, Compass, Layers3, LoaderCircle, Map as MapIcon, MapPin, Navigation, RotateCcw, Route, SlidersHorizontal, TriangleAlert, X } from "lucide-react";
 import Map2D from "./components/Map2D";
 import { isRouteServiceConfigured, requestRoute, type RouteResult } from "./routeService";
-import type { LayerId, LayerVisibility, MarkerKind, MarsCoordinate, RegionManifest } from "./types";
+import type { CoverageVisibility, LayerId, LayerVisibility, MarkerKind, MarsCoordinate, RegionManifest } from "./types";
 
 const Map3D = lazy(() => import("./components/Map3D"));
 const manifestUrl = (import.meta.env.VITE_REGION_MANIFEST_URL as string | undefined)?.trim() || "/data/gale/manifest.json";
@@ -60,12 +60,16 @@ export default function App() {
   const [data, setData] = useState<LoadedRegion | null>(null);
   const [dataError, setDataError] = useState<string | null>(null);
   const [layers, setLayers] = useState<LayerVisibility>(initialLayers);
+  const [coverage, setCoverage] = useState<CoverageVisibility>({ estimated: true, missing: true });
+  const [colorizeImagery, setColorizeImagery] = useState(true);
   const [showLayers, setShowLayers] = useState(false);
   const [view, setView] = useState<"2d" | "3d">("2d");
   const [start, setStart] = useState<MarsCoordinate | null>(null);
   const [destination, setDestination] = useState<MarsCoordinate | null>(null);
   const [activeTool, setActiveTool] = useState<MarkerKind | null>(null);
   const [slope, setSlope] = useState(15);
+  const [marsSol, setMarsSol] = useState("");
+  const [marsLocalTime, setMarsLocalTime] = useState("");
   const [routing, setRouting] = useState(false);
   const [result, setResult] = useState<RouteResult | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -74,6 +78,9 @@ export default function App() {
   const mapStageRef = useRef<HTMLElement>(null);
   const helpRef = useRef<HTMLDialogElement>(null);
   const helpButtonRef = useRef<HTMLButtonElement>(null);
+  const hasMarsDateTime = marsSol !== "" || marsLocalTime !== "";
+  const validMarsDateTime = marsSol !== "" && Number.isSafeInteger(Number(marsSol)) && Number(marsSol) >= 0 &&
+    /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(marsLocalTime);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -135,13 +142,19 @@ export default function App() {
   }, [clearRoute, data, destination, start]);
 
   const calculate = async () => {
-    if (!data || !start || !destination || !isRouteServiceConfigured) return;
+    if (!data || !start || !destination || !isRouteServiceConfigured || (hasMarsDateTime && !validMarsDateTime)) return;
     clearRoute();
     const controller = new AbortController();
     requestRef.current = controller;
     setRouting(true);
     try {
-      const route = await requestRoute({ regionId: data.manifest.id, start, destination, rover: { maxSlopeDeg: slope } }, data.manifest, controller.signal);
+      const route = await requestRoute({
+        regionId: data.manifest.id,
+        start,
+        destination,
+        rover: { maxSlopeDeg: slope },
+        ...(validMarsDateTime ? { marsDateTime: { sol: Number(marsSol), localSolarTime: marsLocalTime, solReference: "mission" as const } } : {}),
+      }, data.manifest, controller.signal);
       if (!controller.signal.aborted) setResult(route);
     } catch (error) {
       if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "The route could not be calculated.");
@@ -158,6 +171,8 @@ export default function App() {
     clearRoute();
     setStart(null);
     setDestination(null);
+    setMarsSol("");
+    setMarsLocalTime("");
     setActiveTool(null);
   };
 
@@ -184,6 +199,7 @@ export default function App() {
   const mapProps = data ? {
     region: data.manifest,
     layers,
+    coverage,
     start,
     destination,
     stop: result?.stop ?? null,
@@ -201,7 +217,7 @@ export default function App() {
       <main ref={mapStageRef} className="map-stage" aria-label="Mars exploration map">
         {mapProps ? view === "2d" ? <Map2D {...mapProps} /> : (
           <Suspense fallback={<div className="map-loading"><LoaderCircle className="spin" /> Preparing terrain view…</div>}>
-            <Map3D {...mapProps} />
+            <Map3D {...mapProps} colorizeImagery={colorizeImagery} />
           </Suspense>
         ) : (
           <div className="map-loading" role="status">
@@ -220,14 +236,34 @@ export default function App() {
               <div className="layers-card">
                 <div className="layers-heading"><div><span className="eyebrow">EXPLORE THE DATA</span><h2>Map layers</h2></div><button className="icon-button" aria-label="Close layers" onClick={() => setShowLayers(false)}><X size={16} /></button></div>
                 {layerDescriptions.map((layer) => (
-                  <label className="layer-row" key={layer.id}>
-                    <span className={`layer-swatch swatch-${layer.id}`} aria-hidden="true" />
-                    <span className="layer-name"><strong>{layer.label}</strong><small>{layer.description}</small></span>
-                    <input type="checkbox" checked={layers[layer.id]} onChange={(event) => setLayers((previous) => ({ ...previous, [layer.id]: event.target.checked }))} />
-                  </label>
+                  <Fragment key={layer.id}>
+                    <label className="layer-row">
+                      <span className={`layer-swatch swatch-${layer.id}`} aria-hidden="true" />
+                      <span className="layer-name"><strong>{layer.label}</strong><small>{layer.description}</small></span>
+                      <input type="checkbox" checked={layers[layer.id]} onChange={(event) => setLayers((previous) => ({ ...previous, [layer.id]: event.target.checked }))} />
+                    </label>
+                    {layer.id === "imagery" && view === "3d" && layers.imagery && (
+                      <label className="imagery-tint-option">
+                        <span><strong>Warm tint</strong><small>Display color, not natural color</small></span>
+                        <input type="checkbox" checked={colorizeImagery} onChange={(event) => setColorizeImagery(event.target.checked)} />
+                      </label>
+                    )}
+                    {layer.id === "coverage" && (
+                      <div className="coverage-options" aria-label="Data coverage options">
+                        {(["estimated", "missing"] as const).map((category) => (
+                          <label className="coverage-option" key={category}>
+                            <i className={`coverage-key coverage-${category}`} aria-hidden="true" />
+                            <span>{category === "estimated" ? "Estimated" : "Missing"}</span>
+                            <input type="checkbox" checked={coverage[category]} disabled={!layers.coverage || !data?.manifest.coverageLayers}
+                              onChange={(event) => setCoverage((previous) => ({ ...previous, [category]: event.target.checked }))} />
+                          </label>
+                        ))}
+                        {data && !data.manifest.coverageLayers && <small>Separate coverage masks are unavailable for this region.</small>}
+                      </div>
+                    )}
+                  </Fragment>
                 ))}
                 {layers.slope && <div className="slope-legend"><span>Approximate slope</span><div className="slope-ramp" /><div className="legend-ticks"><span>0°</span><span>10°</span><span>20°</span><span>30°+</span></div></div>}
-                {layers.coverage && <div className="coverage-legend" aria-label="Coverage legend"><span><i className="coverage-key coverage-missing" /> Missing</span><span><i className="coverage-key coverage-estimated" /> Estimated</span></div>}
               </div>
             )}
           </div>
@@ -240,7 +276,7 @@ export default function App() {
 
       <aside className="planner-panel" aria-label="Trip planner">
         <div className="panel-topline">
-          <div className="brand"><span className="brand-icon"><Compass size={17} strokeWidth={2.2} /></span><span>WAYFINDER</span><span className="brand-tag">MARS</span></div>
+          <div className="brand"><span className="brand-icon"><Compass size={17} strokeWidth={2.2} /></span><span>MarMap</span></div>
           <button ref={helpButtonRef} className="icon-button help-button" title="Map help" aria-label="Open map help" onClick={() => helpRef.current?.showModal()}><CircleHelp size={19} /></button>
         </div>
 
@@ -268,7 +304,24 @@ export default function App() {
             <div className="range-ends"><span>3°</span><span>30°</span></div>
           </div>
 
-          <button className="route-button" disabled={!start || !destination || !isRouteServiceConfigured || routing || !data} onClick={() => void calculate()}>
+          <div className="mars-time-block">
+            <div className="mars-time-heading"><Clock3 size={15} /> Mars date &amp; time</div>
+            <div className="mars-time-fields">
+              <label htmlFor="mars-sol">Mission sol
+                <input id="mars-sol" type="number" min="0" step="1" inputMode="numeric" placeholder="Sol" value={marsSol}
+                  aria-invalid={hasMarsDateTime && !validMarsDateTime} aria-describedby={hasMarsDateTime && !validMarsDateTime ? "mars-time-error" : undefined}
+                  onChange={(event) => { clearRoute(); setMarsSol(event.target.value); }} />
+              </label>
+              <label htmlFor="mars-time">Local solar time
+                <input id="mars-time" type="time" value={marsLocalTime}
+                  aria-invalid={hasMarsDateTime && !validMarsDateTime} aria-describedby={hasMarsDateTime && !validMarsDateTime ? "mars-time-error" : undefined}
+                  onChange={(event) => { clearRoute(); setMarsLocalTime(event.target.value); }} />
+              </label>
+            </div>
+            {hasMarsDateTime && !validMarsDateTime && <small id="mars-time-error" className="mars-time-error">Enter a valid sol and time.</small>}
+          </div>
+
+          <button className="route-button" disabled={!start || !destination || !isRouteServiceConfigured || routing || !data || (hasMarsDateTime && !validMarsDateTime)} onClick={() => void calculate()}>
             {routing ? <><LoaderCircle className="spin" size={17} /> Calculating…</> : <><Route size={17} /> Find route <ArrowRight size={16} /></>}
           </button>
 
@@ -279,11 +332,11 @@ export default function App() {
       </aside>
 
       <dialog ref={helpRef} className="help-dialog" aria-labelledby="help-title" onClose={() => helpButtonRef.current?.focus()}>
-        <div className="help-header"><div><span className="eyebrow">WAYFINDER</span><h2 id="help-title">Map guide</h2></div><button className="icon-button help-close" aria-label="Close map help" onClick={() => helpRef.current?.close()} autoFocus><X size={19} /></button></div>
+        <div className="help-header"><div><span className="eyebrow">MarMap</span><h2 id="help-title">Map guide</h2></div><button className="icon-button help-close" aria-label="Close map help" onClick={() => helpRef.current?.close()} autoFocus><X size={19} /></button></div>
         <div className="help-items">
-          <div className="help-item"><span className="help-icon"><MapPin size={17} /></span><div><strong>Plan a trip</strong><p>Select A for the start and B for the science site, then choose each on the map. The routing service supplies P as a parking candidate.</p></div></div>
+          <div className="help-item"><span className="help-icon"><MapPin size={17} /></span><div><strong>Plan a trip</strong><p>Select A for the start and B for the science site. Optionally enter a mission-relative sol and local solar time at the start. The routing service supplies P as a parking candidate.</p></div></div>
           <div className="help-item"><span className="help-icon"><Layers3 size={17} /></span><div><strong>Layers &amp; coverage</strong><p>Amber marks missing elevation; blue marks estimates. Clear areas show source data, not confirmed safety.</p></div></div>
-          <div className="help-item"><span className="help-icon"><Box size={17} /></span><div><strong>Terrain detail</strong><p>{data ? `The source grid is about ${data.manifest.pixelSize[0].toFixed(1)} m. ` : ""}The 3D view shows its current resolution. Data may be estimated; imagery alignment and height units are unverified.</p></div></div>
+          <div className="help-item"><span className="help-icon"><Box size={17} /></span><div><strong>Terrain detail</strong><p>{data ? `The source grid is about ${data.manifest.pixelSize[0].toFixed(1)} m. ` : ""}The 3D view shows its current resolution; missing areas are flat markers, not heights. Imagery alignment and height units are unverified.</p></div></div>
           <div className="help-item"><span className="help-icon"><Route size={17} /></span><div><strong>Routes</strong><p>{isRouteServiceConfigured ? "Routes come from the connected service and are estimates." : "Connect a route service to calculate routes."} A partial route ends at a candidate stopping point.</p></div></div>
         </div>
       </dialog>
