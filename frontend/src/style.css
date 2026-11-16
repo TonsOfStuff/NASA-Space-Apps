@@ -71,7 +71,8 @@ input[type="range"] { width: 100%; height: 4px; margin: 13px 0 0; accent-color: 
 .mars-time-fields input { width: 100%; min-width: 0; height: 36px; padding: 0 9px; border: 1px solid #e3e8e2; border-radius: 8px; background: #fff; color: #354640; font-size: 12px; }
 .mars-time-fields input::placeholder { color: #a5afa8; }
 .mars-time-error { display: block; margin-top: 7px; color: #a9664d; font-size: 10px; }
-.route-button { width: 100%; height: 46px; display: flex; justify-content: center; align-items: center; gap: 9px; margin-top: 18px; padding: 0 15px; border: 0; border-radius: 10px; background: #315d50; color: #fff; font-size: 12px; font-weight: 700; }
+.route-note { margin: 18px 2px 0; color: #6c7a72; font-size: 10px; line-height: 1.4; }
+.route-button { width: 100%; height: 46px; display: flex; justify-content: center; align-items: center; gap: 9px; margin-top: 8px; padding: 0 15px; border: 0; border-radius: 10px; background: #315d50; color: #fff; font-size: 12px; font-weight: 700; }
 .route-button svg:last-child { margin-left: auto; }
 .route-button:not(:disabled):hover { background: #23483e; }
 .route-button:disabled { background: #d6ded8; color: #899b90; }

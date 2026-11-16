@@ -366,7 +366,8 @@ export default function App() {
             {hasMarsDateTime && !validMarsDateTime && <small id="mars-time-error" className="mars-time-error">Enter a valid sol and time.</small>}
           </div>
 
-          <button className="route-button" disabled={!start || !destination || !isRouteServiceConfigured || routing || !data || (hasMarsDateTime && !validMarsDateTime)} onClick={() => void calculate()}>
+          <p id="route-note" className="route-note">This is hosted on a free plan backend; routing works, but is a little slow. Please be patient!</p>
+          <button className="route-button" aria-describedby="route-note" disabled={!start || !destination || !isRouteServiceConfigured || routing || !data || (hasMarsDateTime && !validMarsDateTime)} onClick={() => void calculate()}>
             {routing ? <><LoaderCircle className="spin" size={17} /> Calculating…</> : <><Route size={17} /> Find route <ArrowRight size={16} /></>}
           </button>
 
