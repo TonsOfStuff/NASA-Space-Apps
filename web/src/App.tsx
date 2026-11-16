@@ -58,6 +58,32 @@ function movedDescription(label: string, requested: MarsCoordinate | null, evalu
   return distance > 0.1 ? `${label} evaluated ${distance.toFixed(1)} projected m from your selection.` : null;
 }
 
+function routeDetails(result: RouteResult): { shade: string; thermal: string; warnings: string[] } {
+  const warnings = result.warnings;
+  const has = (text: string) => warnings.includes(text);
+  const shade = has("Shade was excluded from the route.") ? "Excluded" :
+    has("Sunlight was not included: no Mars date and time was supplied.") ? "Not included (no Mars time)" :
+    has("The approximate Sun is below the horizon; sunlight was not used as a routing preference.") ? "Not included (Sun below horizon)" :
+    has("Sun direction is an equinox approximation; the mission sol has no configured epoch or seasonal model.") ? "Included" : "Not reported";
+  const thermal = has("Thermal inertia was excluded from the route.") ? "Excluded" :
+    result.thermalInertia ? (result.thermalInertia.coverageFraction > 0 ? "Included" : "Unavailable") : "Not reported";
+  const helpWarnings = new Set([
+    "Shade was excluded from the route.",
+    "Sunlight was not included: no Mars date and time was supplied.",
+    "The approximate Sun is below the horizon; sunlight was not used as a routing preference.",
+    "Thermal inertia was excluded from the route.",
+    "Sun direction is an equinox approximation; the mission sol has no configured epoch or seasonal model.",
+    "The science site is blocked by the rover model; the nearest traversable cell was used as the target.",
+    "Thermal inertia is approximately 100 m per pixel and is used as a coarse ground-condition estimate.",
+    "Parking is the model's route endpoint, not a separately validated parking site; Marswalk planning is not yet included.",
+    "The search is limited to the selected area plus a detour margin.",
+  ]);
+  return { shade, thermal, warnings: warnings.filter((warning) => !helpWarnings.has(warning)).map((warning) => {
+    const coarse = /^This large route uses a coarser terrain level: approximately ([\d.]+) m per grid cell\.$/.exec(warning);
+    return coarse ? `Large route approximation: ~${coarse[1]} m per grid cell` : warning;
+  }) };
+}
+
 export default function App() {
   const [data, setData] = useState<LoadedRegion | null>(null);
   const [dataError, setDataError] = useState<string | null>(null);
@@ -70,6 +96,7 @@ export default function App() {
   const [destination, setDestination] = useState<MarsCoordinate | null>(null);
   const [activeTool, setActiveTool] = useState<MarkerKind | null>(null);
   const [slope, setSlope] = useState(15);
+  const [weights, setWeights] = useState({ slope: 1, shade: 1, thermal: 1 });
   const [marsSol, setMarsSol] = useState("");
   const [marsLocalTime, setMarsLocalTime] = useState("");
   const [routing, setRouting] = useState(false);
@@ -155,6 +182,7 @@ export default function App() {
         start,
         destination,
         rover: { maxSlopeDeg: slope },
+        weights,
         ...(validMarsDateTime ? { marsDateTime: { sol: Number(marsSol), localSolarTime: marsLocalTime, solReference: "mission" as const } } : {}),
       }, data.manifest, controller.signal);
       if (!controller.signal.aborted) setResult(route);
@@ -214,6 +242,7 @@ export default function App() {
     movedDescription("Start", start, result.evaluatedStart),
     movedDescription("Destination", destination, result.evaluatedDestination),
   ].filter((entry): entry is string => entry !== null) : [];
+  const details = result ? routeDetails(result) : null;
 
   return (
     <div className="app-shell">
@@ -308,6 +337,18 @@ export default function App() {
             <div className="range-ends"><span>3°</span><span>30°</span></div>
           </div>
 
+          <div className="weights-block">
+            <div className="weights-heading"><SlidersHorizontal size={15} /> Route weights</div>
+            {([ ["slope", "Slope"], ["shade", "Shade"], ["thermal", "Thermal inertia"] ] as const).map(([key, label]) => (
+              <div className="weight-row" key={key}>
+                <label htmlFor={`weight-${key}`}>{label}</label>
+                <input id={`weight-${key}`} type="range" min="0" max="2" step="0.1" value={weights[key]}
+                  onChange={(event) => { clearRoute(); setWeights((previous) => ({ ...previous, [key]: Number(event.target.value) })); }} />
+                <output htmlFor={`weight-${key}`}>{weights[key].toFixed(1)}</output>
+              </div>
+            ))}
+          </div>
+
           <div className="mars-time-block">
             <div className="mars-time-heading"><Clock3 size={15} /> Mars date &amp; time</div>
             <div className="mars-time-fields">
@@ -331,7 +372,21 @@ export default function App() {
 
           {!isRouteServiceConfigured && <div className="service-note" role="status"><span className="service-dot" /><span>Routing not connected</span></div>}
           {message && <div className="notice" role="status"><TriangleAlert size={16} /><span>{message}</span><button className="icon-button" aria-label="Dismiss message" onClick={() => setMessage(null)}><X size={14} /></button></div>}
-          {result && <div className="result-card" role="status"><div className="result-head"><span className="eyebrow">ROUTE ESTIMATE</span><Route size={15} /></div><h3>{result.status === "reached" ? "Route ready" : result.status === "partial" ? "Partial route" : "No route found"}</h3>{result.distanceM !== null && <p className="route-distance">{formatDistance(result.distanceM)} <small>estimated distance</small></p>}{result.thermalInertia && <p>Thermal inertia: {result.thermalInertia.meanAlongRoute === null ? "unavailable" : `${Math.round(result.thermalInertia.meanAlongRoute)} ${result.thermalInertia.units}`} · {Math.round(result.thermalInertia.coverageFraction * 100)}% coverage</p>}{result.status === "partial" && <p>P marks a candidate stopping point.</p>}{result.status === "unreachable" && <p>The service did not find a route with these inputs.</p>}{shifts.map((shift) => <p key={shift}>{shift}</p>)}{result.warnings.map((warning, index) => <p key={`${index}-${warning}`}>{warning}</p>)}</div>}
+          {result && details && (
+            <div className="result-card" role="status">
+              <div className="result-head"><span className="eyebrow">ROUTE ESTIMATE</span><Route size={15} /></div>
+              <h3>{result.status === "reached" ? "Route ready" : result.status === "partial" ? "Partial route" : "No route found"}</h3>
+              {result.distanceM !== null && <p className="route-distance">{formatDistance(result.distanceM)} <small>estimated distance</small></p>}
+              {shifts.length > 0 && <section className="result-group" aria-label="Evaluated locations"><strong>Locations</strong>{shifts.map((shift) => <p key={shift}>{shift}</p>)}</section>}
+              <section className="result-group" aria-label="Route factors">
+                <strong>Route factors</strong>
+                <p>Slope: {result.slopeWeight === null ? "Not reported" : result.slopeWeight === 0 ? "Preference off; tilt limits apply" : "Included; tilt limits apply"}</p>
+                <p>Shade: {details.shade}</p>
+                <p>Thermal inertia: {details.thermal}</p>
+              </section>
+              {(result.status === "unreachable" || details.warnings.length > 0) && <section className="result-group" aria-label="Route notes"><strong>Route notes</strong>{result.status === "unreachable" && <p>The service did not find a route with these inputs.</p>}{details.warnings.map((warning, index) => <p key={`${index}-${warning}`}>{warning}</p>)}</section>}
+            </div>
+          )}
         </div>
       </aside>
 
@@ -339,9 +394,9 @@ export default function App() {
         <div className="help-header"><div><span className="eyebrow">MarMap</span><h2 id="help-title">Map guide</h2></div><button className="icon-button help-close" aria-label="Close map help" onClick={() => helpRef.current?.close()} autoFocus><X size={19} /></button></div>
         <div className="help-items">
           <div className="help-item"><span className="help-icon"><MapPin size={17} /></span><div><strong>Plan a trip</strong><p>Select A for the start and B for the science site. Optionally enter a mission-relative sol and local solar time at the start. The routing service supplies P as a parking candidate.</p></div></div>
-          <div className="help-item"><span className="help-icon"><Layers3 size={17} /></span><div><strong>Layers &amp; coverage</strong><p>Shade uses local solar time, assuming an equinox; it defaults to noon. Thermal inertia is coarse source data. Amber marks missing elevation; blue marks estimates.</p></div></div>
+          <div className="help-item"><span className="help-icon"><Layers3 size={17} /></span><div><strong>Layers &amp; coverage</strong><p>Shade uses local solar time, assuming an equinox; the map defaults to noon. The mission sol has no configured epoch or seasonal model. Thermal inertia is a coarse ground-condition estimate at approximately 100 m per pixel. Amber marks missing elevation; blue marks estimates.</p></div></div>
           <div className="help-item"><span className="help-icon"><Box size={17} /></span><div><strong>Terrain detail</strong><p>{data ? `The source grid is about ${data.manifest.pixelSize[0].toFixed(1)} m. ` : ""}The 3D view shows its current resolution; missing areas are flat markers, not heights. Imagery alignment and height units are unverified.</p></div></div>
-          <div className="help-item"><span className="help-icon"><Route size={17} /></span><div><strong>Routes</strong><p>{isRouteServiceConfigured ? "Routes come from the connected service and are estimates." : "Connect a route service to calculate routes."} A partial route ends at a candidate stopping point.</p></div></div>
+          <div className="help-item"><span className="help-icon"><Route size={17} /></span><div><strong>Routes</strong><p>Weights range from 0 to 2; 1 is the default. Slope and roll limits still apply at 0. Shade needs a Mars time and sunlight. Thermal at 0 excludes its data and threshold. If the science site is blocked by the rover model, the nearest traversable cell is used as the target. The search is limited to the selected area plus a detour margin. Parking is the route endpoint, not a separately validated site; Marswalk planning is not yet included.</p></div></div>
         </div>
       </dialog>
     </div>

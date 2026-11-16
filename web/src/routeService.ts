@@ -9,6 +9,7 @@ export interface RouteRequest {
   start: MarsCoordinate;
   destination: MarsCoordinate;
   rover: { maxSlopeDeg: number };
+  weights: { slope: number; shade: number; thermal: number };
   /** Mission-relative sol and the local solar clock at the starting point. */
   marsDateTime?: {
     sol: number;
@@ -26,6 +27,7 @@ export interface RouteResult {
   evaluatedDestination: MarsCoordinate | null;
   resolutionM: MarsCoordinate | null;
   warnings: string[];
+  slopeWeight: number | null;
   thermalInertia: { coverageFraction: number; meanAlongRoute: number | null; units: string } | null;
 }
 
@@ -38,7 +40,7 @@ export function environmentalLayerUrls(localSolarTime: string): { shade: string;
   const configuredBase = (import.meta.env?.VITE_MAP_API_BASE_URL as string | undefined)?.trim();
   const base = (configuredBase || endpoint.replace(/\/route(?:\?.*)?$/, "")).replace(/\/$/, "");
   return {
-    shade: `${base}/tiles/shade/{z}/{x}/{y}.png?localSolarTime=${encodeURIComponent(localSolarTime)}`,
+    shade: `${base}/tiles/shade/{z}/{x}/{y}.png?localSolarTime=${encodeURIComponent(localSolarTime)}&style=2`,
     thermal: `${base}/tiles/thermal/{z}/{x}/{y}.png`,
   };
 }
@@ -115,6 +117,9 @@ export function parseRouteResponse(payload: unknown, region: RegionManifest): Ro
     throw new Error("The route service returned an invalid evaluated location.");
   }
   const thermal = isObject(payload.thermalInertia) ? payload.thermalInertia : null;
+  const appliedWeights = isObject(payload.weights) ? payload.weights : null;
+  const slopeWeight = appliedWeights && typeof appliedWeights.slope === "number" && Number.isFinite(appliedWeights.slope) &&
+    appliedWeights.slope >= 0 && appliedWeights.slope <= 2 ? appliedWeights.slope : null;
   const thermalInertia = thermal && typeof thermal.coverageFraction === "number" && Number.isFinite(thermal.coverageFraction) &&
     thermal.coverageFraction >= 0 && thermal.coverageFraction <= 1 &&
     (thermal.meanAlongRoute === null || (typeof thermal.meanAlongRoute === "number" && Number.isFinite(thermal.meanAlongRoute))) &&
@@ -130,6 +135,7 @@ export function parseRouteResponse(payload: unknown, region: RegionManifest): Ro
     evaluatedDestination,
     resolutionM: coordinate(payload.resolutionM),
     warnings: Array.isArray(payload.warnings) ? payload.warnings.filter((warning): warning is string => typeof warning === "string") : [],
+    slopeWeight,
     thermalInertia,
   };
 }

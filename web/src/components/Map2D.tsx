@@ -20,7 +20,7 @@ import "ol/ol.css";
 
 import type { LayerId, MapViewProps, MarsCoordinate } from "../types";
 
-const layerOrder: LayerId[] = ["imagery", "elevation", "shade", "thermal", "slope", "coverage"];
+const layerOrder: LayerId[] = ["imagery", "elevation", "thermal", "slope", "shade", "coverage"];
 
 function markerStyle(label: string, color: string) {
   return new Style({

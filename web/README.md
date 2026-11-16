@@ -64,6 +64,7 @@ POST <VITE_ROUTE_API_URL>
   "start": [-2494500, -316000],
   "destination": [-2493000, -315000],
   "rover": { "maxSlopeDeg": 15 },
+  "weights": { "slope": 1, "shade": 1, "thermal": 1 },
   "marsDateTime": { "sol": 42, "localSolarTime": "14:30", "solReference": "mission" }
 }
 ```
@@ -85,7 +86,9 @@ POST <VITE_ROUTE_API_URL>
 
 Coordinates are `[easting, northing]` in the selected region's projected **Mars** CRS and are interpreted using the region manifest; they are not Earth coordinates. `marsDateTime` is optional: `sol` is a non-negative mission-relative sol and `localSolarTime` is a 24-hour `HH:MM` local solar clock at the start point. With a time, the backend estimates the Sun's direction assuming an equinox; the sol cannot determine season until the mission epoch is known. Without a time, sunlight is not used as a route preference. The backend reports these assumptions in its warnings. `status` is `reached`, `partial`, or `unreachable`. The backend returns its route endpoint as `stop`; this is a parking candidate, not a separate parking-suitability calculation. `unreachable` uses an empty path. `distanceM`, evaluated points and resolution may be null when unavailable. If the backend evaluates cell centers rather than the exact selections, return those positions so the UI can disclose the displacement. Errors use `{ "error": { "code": "...", "message": "..." } }` with a non-success HTTP status.
 
-The service uses a bounded search area around the chosen points and selects a coarser terrain level for large requests. It warns about missing thermal data and reduced resolution. The thermal thresholds use the defaults in `new_algo.py`; its input cube has approximately 100 m source pixels. The frontend adapter validates responses and cancels obsolete requests when the selection or rover settings change. A future service can replace the adapter without changing the map controls.
+The service searches a bounded area around the chosen points, extending at least 2 km or 40% of the straight-line distance on each side, limited by the available region. It selects a coarser terrain level for large requests and warns about missing thermal data and reduced resolution. The thermal thresholds use the defaults in `new_algo.py`; its input cube has approximately 100 m source pixels. The frontend adapter validates responses and cancels obsolete requests when the selection or rover settings change. A future service can replace the adapter without changing the map controls.
+
+The optional `weights` object contains `slope`, `shade`, and `thermal` values from 0 to 2; each defaults to 1 and scales the corresponding existing route cost. Slope also scales the roll cost, but the rover's maximum slope and roll limits still apply at zero. Shade affects routing only when usable Mars time and sunlight are available. Setting thermal to zero excludes thermal data and its hard threshold; any positive thermal weight retains that threshold. The response returns the applied weights.
 
 The **Shade** and **Thermal inertia** map layers are rendered by the backend on demand; no additional tile archive is stored. Thermal values use a fixed 100–600 TIU color scale, with missing values transparent. Shade uses the local solar time entered in the planner, or 12:00 when empty, with an equinox assumption and a 500 m shadow search. The mission sol does not determine a season until an epoch is provided. The API keeps a bounded in-memory cache of generated PNG tiles. If map layers are hosted at a different API base from routing, set `VITE_MAP_API_BASE_URL` in the frontend environment.
 

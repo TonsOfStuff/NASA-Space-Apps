@@ -8,6 +8,7 @@ import {
   NearestFilter,
   Plane,
   SRGBColorSpace,
+  Sprite,
   Texture,
   Vector3,
 } from "three";
@@ -25,8 +26,13 @@ type Map3DProps = MapViewProps & { colorizeImagery: boolean };
 type RenderLayer = LayerId | "estimated" | "missing";
 type Edge = "north" | "south" | "west" | "east";
 type TerrainBounds = { left: number; right: number; north: number; south: number };
+type MarkerName = "start" | "destination" | "stop";
+type MarkerSide = "left" | "center" | "right";
 
-const layerOrder: LayerId[] = ["imagery", "elevation", "shade", "thermal", "slope", "coverage"];
+const routeColor = "#59dbed";
+const routeOutline = "#0e191f";
+
+const layerOrder: LayerId[] = ["imagery", "elevation", "thermal", "slope", "shade", "coverage"];
 const terrainCache = new Map<string, Promise<Float32Array | null>>();
 const imageCache = new Map<string, Promise<HTMLImageElement | null>>();
 
@@ -123,6 +129,17 @@ function heightAt(loaded: Loaded, region: RegionManifest, [x, y]: MarsCoordinate
 function toScene(region: RegionManifest, [x, y]: MarsCoordinate, height: number): [number, number, number] {
   return [x - (region.extent[0] + region.extent[2]) / 2, height - region.elevationRange[0],
     (region.extent[1] + region.extent[3]) / 2 - y];
+}
+
+function visibleTerrainHeight(region: RegionManifest, loaded: Loaded, overview: Loaded | null,
+  detailBounds: TerrainBounds | null, overviewVisible: boolean, coordinate: MarsCoordinate): number | null {
+  const [x, , z] = toScene(region, coordinate, 0);
+  const inDetail = detailBounds && x >= detailBounds.left && x <= detailBounds.right &&
+    z >= detailBounds.north && z <= detailBounds.south;
+  // Loaded tiles include a halo for interpolation; outside the detail area,
+  // use the overview only when it is actually rendered.
+  const surface = inDetail ? loaded : overviewVisible ? overview : null;
+  return surface ? heightAt(surface, region, coordinate) : null;
 }
 
 function makeGeometry(region: RegionManifest, loaded: Loaded, tile: Tile, overview: Loaded | null, edges: Edge[]): BufferGeometry {
@@ -335,19 +352,107 @@ function MissingSurface({ region, loaded, tile, clipPlanes }: { region: RegionMa
   </mesh>;
 }
 
-function Markers({ region, loaded, overview, start, destination, stop }: Pick<MapViewProps, "region" | "start" | "destination" | "stop"> & { loaded: Loaded; overview: Loaded | null }) {
-  const resolution = region.resolutions[loaded.z];
-  const radius = resolution * 2;
+function markerTexture(label: string, side: MarkerSide): CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 384; canvas.height = 128;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Could not prepare the 3D marker.");
+  const x = 192 + (side === "left" ? -128 : side === "right" ? 128 : 0);
+
+  // The stem points to the actual terrain location even when nearby labels
+  // have been moved apart on screen.
+  context.beginPath();
+  context.moveTo(192, 126);
+  context.lineTo(x, 81);
+  context.lineCap = "round";
+  context.strokeStyle = routeOutline;
+  context.lineWidth = 14;
+  context.stroke();
+  context.strokeStyle = routeColor;
+  context.lineWidth = 7;
+  context.stroke();
+  context.beginPath();
+  context.arc(x, 47, 36, 0, Math.PI * 2);
+  context.fillStyle = routeColor;
+  context.fill();
+  context.strokeStyle = routeOutline;
+  context.lineWidth = 10;
+  context.stroke();
+  context.fillStyle = routeOutline;
+  context.font = "800 50px system-ui, sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(label, x, 48);
+
+  const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
+  return texture;
+}
+
+function Markers({ region, loaded, overview, detailBounds, overviewVisible, start, destination, stop }: Pick<MapViewProps, "region" | "start" | "destination" | "stop"> & {
+  loaded: Loaded; overview: Loaded | null; detailBounds: TerrainBounds | null; overviewVisible: boolean;
+}) {
+  const refs = useRef<Partial<Record<MarkerName, Sprite>>>({});
+  const textures = useMemo(() => {
+    const create = (label: string) => ({
+      left: markerTexture(label, "left"), center: markerTexture(label, "center"), right: markerTexture(label, "right"),
+    });
+    return { start: create("A"), destination: create("B"), stop: create("P") };
+  }, []);
+  useEffect(() => () => {
+    Object.values(textures).forEach((variants) => Object.values(variants).forEach((texture) => texture.dispose()));
+  }, [textures]);
+
+  useFrame(({ camera, size }) => {
+    // Keep markers a consistent number of CSS pixels tall while zooming.
+    const height = 40;
+    const scale = 2 * height / (Math.max(size.height, 1) * camera.projectionMatrix.elements[5]);
+    camera.updateMatrixWorld();
+    const points: { name: MarkerName; sprite: Sprite; x: number; y: number }[] = [];
+    for (const name of ["start", "destination", "stop"] as const) {
+      const sprite = refs.current[name];
+      if (!sprite) continue;
+      sprite.scale.set(scale * 3, scale, 1);
+      const projected = sprite.position.clone().project(camera);
+      if (projected.z < -1 || projected.z > 1) continue;
+      points.push({ name, sprite, x: projected.x * size.width / 2, y: projected.y * size.height / 2 });
+    }
+
+    // Parking often coincides with the target. Spread nearby badges apart,
+    // retaining a stem to each marker's own projected location.
+    const parent = points.map((_, index) => index);
+    const root = (index: number) => { while (parent[index] !== index) index = parent[index]; return index; };
+    for (let i = 0; i < points.length; i++) for (let j = i + 1; j < points.length; j++) {
+      if (Math.abs(points[i].x - points[j].x) < 64 && Math.abs(points[i].y - points[j].y) < 40) parent[root(j)] = root(i);
+    }
+    const groups = new Map<number, typeof points>();
+    points.forEach((point, index) => {
+      const key = root(index);
+      const group = groups.get(key) ?? [];
+      group.push(point);
+      groups.set(key, group);
+    });
+    groups.forEach((group) => {
+      group.sort((a, b) => a.x - b.x);
+      group.forEach(({ name, sprite }, index) => {
+        const side = group.length === 1 ? "center" : index === 0 ? "left" : index === group.length - 1 ? "right" : "center";
+        sprite.material.map = textures[name][side];
+      });
+    });
+  });
+
   return <>{([
-    ["start", start, "#147bdb"], ["destination", destination, "#f15e4a"], ["stop", stop, "#eaa24d"],
-  ] as const).map(([name, coordinate, color]) => {
+    ["start", start], ["destination", destination], ["stop", stop],
+  ] as const).map(([name, coordinate]) => {
     if (!coordinate) return null;
-    const height = heightAt(loaded, region, coordinate) ?? (overview && heightAt(overview, region, coordinate));
+    const height = visibleTerrainHeight(region, loaded, overview, detailBounds, overviewVisible, coordinate);
     if (height === null) return null;
-    const [x, y, z] = toScene(region, coordinate, height);
-    return <mesh key={name} position={[x, y + radius, z]}>
-      <sphereGeometry args={[radius, 14, 10]} /><meshStandardMaterial color={color} roughness={0.65} />
-    </mesh>;
+    const position = toScene(region, coordinate, height + region.resolutions[loaded.z] * 0.1);
+    return <sprite key={name} ref={(sprite) => { if (sprite) refs.current[name] = sprite; else delete refs.current[name]; }}
+      position={position} center={[0.5, 0]} renderOrder={3}>
+      <spriteMaterial map={textures[name].center} transparent depthWrite={false} sizeAttenuation={false} toneMapped={false}
+        polygonOffset polygonOffsetFactor={-1} polygonOffsetUnits={-1} />
+    </sprite>;
   })}</>;
 }
 
@@ -361,13 +466,7 @@ function RouteLine({ region, loaded, overview, route, detailBounds, overviewVisi
     let last: [number, number, number] | null = null;
 
     const addPoint = (coordinate: MarsCoordinate) => {
-      const [x, , z] = toScene(region, coordinate, 0);
-      const inDetail = detailBounds && x >= detailBounds.left && x <= detailBounds.right &&
-        z >= detailBounds.north && z <= detailBounds.south;
-      // The detailed tile data also contains a halo for interpolation. Outside
-      // the rendered detail area, sample the visible overview instead.
-      const surface = inDetail ? loaded : overviewVisible ? overview : null;
-      const height = surface && heightAt(surface, region, coordinate);
+      const height = visibleTerrainHeight(region, loaded, overview, detailBounds, overviewVisible, coordinate);
       if (height === null) { last = null; return; }
       const point = toScene(region, coordinate, height + step * 0.2);
       if (last) positions.push(...last, ...point);
@@ -393,8 +492,8 @@ function RouteLine({ region, loaded, overview, route, detailBounds, overviewVisi
     // keeps the cyan route distinct from both light and dark terrain. The
     // depth bias prevents flickering where the line lies close to the surface.
     const materialOptions = { depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 };
-    const outline = new LineSegments2(geometry, new LineMaterial({ ...materialOptions, color: "#0e191f", linewidth: 9 }));
-    const center = new LineSegments2(geometry, new LineMaterial({ ...materialOptions, color: "#59dbed", linewidth: 5 }));
+    const outline = new LineSegments2(geometry, new LineMaterial({ ...materialOptions, color: routeOutline, linewidth: 9 }));
+    const center = new LineSegments2(geometry, new LineMaterial({ ...materialOptions, color: routeColor, linewidth: 5 }));
     outline.renderOrder = 1;
     center.renderOrder = 2;
     return { geometry, outline, center };
@@ -555,7 +654,8 @@ function TerrainTiles(props: Map3DProps & { selection: Selection | null; onStatu
       {overview && clipPlanes && overview.tiles.map((tile) => <MissingSurface key={`missing-overview/${overview.z}/${tile.x}/${tile.y}`} region={region} loaded={overview} tile={tile} clipPlanes={clipPlanes} />)}
       {loaded.tiles.map((tile) => <MissingSurface key={`missing/${loaded.z}/${tile.x}/${tile.y}`} region={region} loaded={loaded} tile={tile} />)}
     </>}
-    <Markers region={region} loaded={loaded} overview={overview} start={props.start} destination={props.destination} stop={props.stop} />
+    <Markers region={region} loaded={loaded} overview={overview} detailBounds={detailBounds} overviewVisible={!!clipPlanes}
+      start={props.start} destination={props.destination} stop={props.stop} />
     <RouteLine region={region} loaded={loaded} overview={overview} route={props.route}
       detailBounds={detailBounds} overviewVisible={!!clipPlanes} />
   </>;
