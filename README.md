@@ -1,7 +1,13 @@
-# NASA-Space-Apps
+# MarMap
 
 An exploratory Mars map and terrain-routing application.
 
+See for yourself here: [https://marmap.quobits.workers.dev/](https://marmap.quobits.workers.dev/)
+
+<img width="1512" height="881" alt="image" src="https://github.com/user-attachments/assets/224e7d31-0afc-419b-b914-9a777d747a0a" />
+
+
+## For developers
 - [`frontend/`](frontend/) contains the React map and its Node.js dependencies.
 - [`backend/`](backend/) contains the Python route and map-layer service, its
   Python environment configuration, and local raster data in `backend/data/`.
