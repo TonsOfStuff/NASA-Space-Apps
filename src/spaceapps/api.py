@@ -38,7 +38,7 @@ DEFAULT_MANIFEST = ROOT / "web/public/data/gale/manifest.json"
 DEFAULT_TERRAIN = ROOT / "web/public/data/gale/tiles/terrain"
 DEFAULT_DEM = ROOT / "src/spaceapps/data/gale_20m_interpolated_feathered.tif"
 DEFAULT_THERMAL = ROOT / "src/spaceapps/data/thermal.cub"
-MAX_CELLS = 1_000_000
+MAX_CELLS = 10_000_000
 
 # Numba's workqueue threading layer aborts the process if parallel kernels
 # overlap across Python threads. Both route construction and shade tiles call
@@ -93,7 +93,7 @@ def _terrain_window(manifest: dict, terrain_dir: Path, start, destination):
             raise ApiError(422, "outside_region", f"The {label} is outside the available region.")
 
     distance = math.hypot(destination[0] - start[0], destination[1] - start[1])
-    margin = max(1000.0, distance * 0.2)
+    margin = max(2000.0, distance * 0.4)
     bounds = (max(left, min(start[0], destination[0]) - margin),
               max(bottom, min(start[1], destination[1]) - margin),
               min(right, max(start[0], destination[0]) + margin),
@@ -239,7 +239,8 @@ def _map_tile(manifest_path: str, manifest_version: int, terrain_dir: str, dem_p
             shade = np.ones(elevation.shape, dtype=np.float32)
         crop = np.s_[halo:halo + size, halo:halo + size]
         rgba[..., :3] = (22, 28, 51)
-        rgba[..., 3] = np.where(valid[crop], shade[crop] * 190, 0).astype(np.uint8)
+        # Boost partial shade for readability without darkening fully lit cells.
+        rgba[..., 3] = np.where(valid[crop], np.sqrt(shade[crop]) * 225, 0).astype(np.uint8)
     else:
         raise ApiError(404, "tile_not_found", "Unknown map layer.")
     in_region = ((tile_y * size + np.arange(size))[:, None] < rows) & ((tile_x * size + np.arange(size))[None, :] < cols)
@@ -257,6 +258,15 @@ def calculate_route(payload, manifest: dict, terrain_dir: Path, dem_path: Path, 
     slope = rover.get("maxSlopeDeg") if isinstance(rover, dict) else None
     if isinstance(slope, bool) or not isinstance(slope, (int, float)) or not math.isfinite(slope) or not 0 < slope < 90:
         raise ApiError(400, "invalid_rover", "Maximum slope must be between 0 and 90 degrees.")
+    raw_weights = payload.get("weights", {})
+    if not isinstance(raw_weights, dict):
+        raise ApiError(400, "invalid_weights", "Route weights must be an object.")
+    weights = {}
+    for key in ("slope", "shade", "thermal"):
+        value = raw_weights.get(key, 1.0)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 2:
+            raise ApiError(400, "invalid_weights", f"{key.capitalize()} weight must be between 0 and 2.")
+        weights[key] = float(value)
     elevation, transform, resolution, zoom = _terrain_window(manifest, terrain_dir, start, destination)
     with rasterio.open(dem_path) as dem:
         if dem.crs is None or dem.width != manifest["width"] or dem.height != manifest["height"] or not np.allclose(dem.bounds, manifest["extent"], rtol=0, atol=0.01):
@@ -264,16 +274,24 @@ def calculate_route(payload, manifest: dict, terrain_dir: Path, dem_path: Path, 
         dem_crs = dem.crs
         _, latitudes = transform_coordinates(dem_crs, dem_crs.geodetic_crs, [start[0]], [start[1]])
     azimuth, altitude, sun_weight, warnings = _solar_inputs(payload.get("marsDateTime"), latitudes[0])
-    thermal = _thermal_window(thermal_path, dem_crs, transform, elevation.shape)
-    thermal_layer = CostLayer("Thermal inertia", thermal, weight=3.0, lo=250, hi=300,
-                              block_below=200, invert=True, units="TIU")
+    sun_weight *= weights["shade"]
+    if weights["shade"] == 0:
+        warnings = ["Shade was excluded from the route."]
+    thermal = None
+    layers = []
+    if weights["thermal"] > 0:
+        thermal = _thermal_window(thermal_path, dem_crs, transform, elevation.shape)
+        layers.append(CostLayer("Thermal inertia", thermal, weight=3.0 * weights["thermal"], lo=250, hi=300,
+                                block_below=200, invert=True, units="TIU"))
+    else:
+        warnings.append("Thermal inertia was excluded from the route.")
     try:
         with SHADOW_KERNEL_LOCK:
             router = TerrainRouter(elevation, resolution, resolution, max_slope_deg=float(slope),
                                    max_roll_deg=10, rover_radius_m=1, smooth_sigma=1,
-                                   slope_weight=10, roll_weight=10, sun_az_deg=azimuth,
+                                   slope_weight=10 * weights["slope"], roll_weight=10 * weights["slope"], sun_az_deg=azimuth,
                                    sun_alt_deg=altitude, sun_weight=sun_weight,
-                                   shadow_dist_m=500 if sun_weight else 0, layers=[thermal_layer])
+                                   shadow_dist_m=500 if sun_weight else 0, layers=layers)
         start_rc = tuple(map(int, rasterio.transform.rowcol(transform, *start)))
         destination_rc = tuple(map(int, rasterio.transform.rowcol(transform, *destination)))
         for label, (row, col) in (("start", start_rc), ("destination", destination_rc)):
@@ -297,11 +315,16 @@ def calculate_route(payload, manifest: dict, terrain_dir: Path, dem_path: Path, 
         return [float(x), float(y)]
 
     path = [coord(cell) for cell in result.path]
-    path_thermal = thermal[result.path[:, 0], result.path[:, 1]]
-    valid_thermal = np.isfinite(path_thermal)
-    if not valid_thermal.all():
-        warnings.append(f"Thermal inertia is missing for {np.count_nonzero(~valid_thermal)} of {len(path_thermal)} route cells; those cells have no thermal penalty.")
-    warnings.append("Thermal inertia is approximately 100 m per pixel and is used as a coarse ground-condition estimate.")
+    thermal_info = None
+    if thermal is not None:
+        path_thermal = thermal[result.path[:, 0], result.path[:, 1]]
+        valid_thermal = np.isfinite(path_thermal)
+        if not valid_thermal.all():
+            warnings.append(f"Thermal inertia is missing for {np.count_nonzero(~valid_thermal)} of {len(path_thermal)} route cells; those cells have no thermal penalty.")
+        warnings.append("Thermal inertia is approximately 100 m per pixel and is used as a coarse ground-condition estimate.")
+        thermal_info = {"coverageFraction": float(valid_thermal.mean()),
+                        "meanAlongRoute": float(path_thermal[valid_thermal].mean()) if valid_thermal.any() else None,
+                        "units": "TIU"}
     warnings.append("Parking is the model's route endpoint, not a separately validated parking site; Marswalk planning is not yet included.")
     if zoom < manifest["maxZoom"]:
         warnings.append(f"This large route uses a coarser terrain level: approximately {resolution:.0f} m per grid cell.")
@@ -311,10 +334,7 @@ def calculate_route(payload, manifest: dict, terrain_dir: Path, dem_path: Path, 
         "regionId": manifest["id"], "status": "reached" if reached else "partial", "path": path,
         "stop": path[-1], "distanceM": float(result.length_grid), "evaluatedStart": coord(start_rc),
         "evaluatedDestination": coord(evaluated_target), "resolutionM": [resolution, resolution],
-        "warnings": warnings,
-        "thermalInertia": {"coverageFraction": float(valid_thermal.mean()),
-                           "meanAlongRoute": float(path_thermal[valid_thermal].mean()) if valid_thermal.any() else None,
-                           "units": "TIU"},
+        "warnings": warnings, "weights": weights, "thermalInertia": thermal_info,
     }
 
 
