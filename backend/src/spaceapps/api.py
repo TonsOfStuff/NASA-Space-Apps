@@ -33,11 +33,12 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 from .new_algo import CostLayer, TerrainRouter, compute_illumination  # noqa: E402
 
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MANIFEST = ROOT / "web/public/data/gale/manifest.json"
-DEFAULT_TERRAIN = ROOT / "web/public/data/gale/tiles/terrain"
-DEFAULT_DEM = ROOT / "src/spaceapps/data/gale_20m_interpolated_feathered.tif"
-DEFAULT_THERMAL = ROOT / "src/spaceapps/data/thermal.cub"
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+ROOT = BACKEND_ROOT.parent
+DEFAULT_MANIFEST = ROOT / "frontend/public/data/gale/manifest.json"
+DEFAULT_TERRAIN = ROOT / "frontend/public/data/gale/tiles/terrain"
+DEFAULT_DEM = BACKEND_ROOT / "data/gale_20m_interpolated_feathered.tif"
+DEFAULT_THERMAL = BACKEND_ROOT / "data/thermal.cub"
 MAX_CELLS = 10_000_000
 
 # Numba's workqueue threading layer aborts the process if parallel kernels

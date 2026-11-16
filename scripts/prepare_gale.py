@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prepare a native-resolution, tiled Gale region for the web map.
 
-Run from the repository root with ``.venv/bin/python scripts/prepare_gale.py``.
+Run from the repository root with ``backend/.venv/bin/python scripts/prepare_gale.py``.
 The data are exploratory: image/DEM registration and the elevation vertical
 datum/units must be independently verified before use for decisions.
 """
@@ -25,6 +25,9 @@ from rasterio.windows import Window
 
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_DEM = ROOT / "backend/data/gale_20m_interpolated_feathered.tif"
+DEFAULT_IMAGERY = ROOT / "backend/data/curiosity_ctx_mosaic.tif"
+DEFAULT_OUTPUT = ROOT / "frontend/public/data/gale"
 TILE_SIZE = 256
 IMAGERY_RATIO = 2
 IMAGERY_TILE_SIZE = TILE_SIZE * IMAGERY_RATIO
@@ -350,10 +353,10 @@ def prepare(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dem", type=Path, default=ROOT / "src/spaceapps/data/gale_20m_interpolated_feathered.tif")
+    parser.add_argument("--dem", type=Path, default=DEFAULT_DEM)
     parser.add_argument("--provenance", type=Path, help="Optional 0=source, 1=estimated, 2=missing GeoTIFF; defaults to the DEM's PROVENANCE tag when present")
-    parser.add_argument("--imagery", type=Path, default=ROOT / "src/spaceapps/data/curiosity_ctx_mosaic.tif")
-    parser.add_argument("--output", type=Path, default=ROOT / "web/public/data/gale")
+    parser.add_argument("--imagery", type=Path, default=DEFAULT_IMAGERY)
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--asset-base", default="/data/gale")
     parser.add_argument("--id", default="gale", help="Lowercase identifier for the region")
     parser.add_argument("--name", default="Gale region", help="Display name for the region")

@@ -4,29 +4,34 @@ A React, TypeScript, OpenLayers and Three.js interface for the available Gale Cr
 
 ## Run locally
 
-Use Node.js 22.12 or newer. The source GeoTIFFs are not checked into Git. Place `gale_20m_mosaic.tif` in `src/spaceapps/`, the original DTM tiles in `src/spaceapps/DTMs/`, and `curiosity_ctx_mosaic.tif` in `src/spaceapps/data/`. The existing `merge_dtms.py` can build the elevation mosaic from the source DTM tiles. The frontend uses a separately interpolated and overlap-blended mosaic and its provenance raster by default. See `scripts/prepare_gale.py --help` for alternate input and output paths.
+Use Node.js 22.12 or newer and Python 3.14. The source GeoTIFFs are not checked into Git. Place `gale_20m_mosaic.tif` and `curiosity_ctx_mosaic.tif` in `backend/data/`, and the original DTM tiles in `backend/data/DTMs/`. The merge script can build the elevation mosaic from the source DTM tiles. The frontend uses a separately interpolated and overlap-blended mosaic and its provenance raster by default. See `scripts/prepare_gale.py --help` for alternate input and output paths.
 
 ```sh
-# From the repository root, after installing the Python dependencies.
+# From the repository root, install the backend and script dependencies:
+(cd backend && uv sync)
+
+# If the elevation mosaic does not exist, merge the source DTM tiles:
+backend/.venv/bin/python scripts/merge_dtms.py
+
 # Run once to generate the derived DEM and provenance; this never overwrites them:
-.venv/bin/python scripts/interpolate_dem_gaps.py src/spaceapps/gale_20m_mosaic.tif \
-  --output src/spaceapps/data/gale_20m_interpolated.tif \
-  --provenance src/spaceapps/data/gale_20m_interpolated_provenance.tif
+backend/.venv/bin/python scripts/interpolate_dem_gaps.py backend/data/gale_20m_mosaic.tif \
+  --output backend/data/gale_20m_interpolated.tif \
+  --provenance backend/data/gale_20m_interpolated_provenance.tif
 
 # Blend the tile 3/4 overlap into another separate DEM:
-.venv/bin/python scripts/blend_dem_overlap.py src/spaceapps/data/gale_20m_interpolated.tif \
-  --provenance src/spaceapps/data/gale_20m_interpolated_provenance.tif \
-  --earlier src/spaceapps/DTMs/PG_Gale_CTX_3_3_AATE_20m.tif \
-  --later src/spaceapps/DTMs/PG_Gale_CTX_4_AATE_20m.tif \
-  --exclude src/spaceapps/DTMs/PG_Gale_CTX_1_AATE_20m.tif \
-  --exclude src/spaceapps/DTMs/PG_Gale_CTX_2_2_AATE_20m.tif \
-  --output src/spaceapps/data/gale_20m_interpolated_feathered.tif \
-  --output-provenance src/spaceapps/data/gale_20m_interpolated_feathered_provenance.tif
+backend/.venv/bin/python scripts/blend_dem_overlap.py backend/data/gale_20m_interpolated.tif \
+  --provenance backend/data/gale_20m_interpolated_provenance.tif \
+  --earlier backend/data/DTMs/PG_Gale_CTX_3_3_AATE_20m.tif \
+  --later backend/data/DTMs/PG_Gale_CTX_4_AATE_20m.tif \
+  --exclude backend/data/DTMs/PG_Gale_CTX_1_AATE_20m.tif \
+  --exclude backend/data/DTMs/PG_Gale_CTX_2_2_AATE_20m.tif \
+  --output backend/data/gale_20m_interpolated_feathered.tif \
+  --output-provenance backend/data/gale_20m_interpolated_feathered_provenance.tif
 
 # Then prepare the frontend tiles:
-.venv/bin/python scripts/prepare_gale.py
+backend/.venv/bin/python scripts/prepare_gale.py
 
-cd web
+cd frontend
 npm install
 npm run dev
 ```
@@ -42,10 +47,10 @@ To swap in another compatible region, prepare a separate manifest and tile set w
 From the repository root, start the Python backend in a second terminal:
 
 ```sh
-.venv/bin/python -m spaceapps.api
+backend/.venv/bin/python -m spaceapps.api
 ```
 
-It listens on `http://127.0.0.1:8000/api/route` and uses the existing `new_algo.py` router, the Gale terrain tiles, and `src/spaceapps/data/thermal.cub`. The frontend connects to this address automatically during development. The terrain tiles and thermal cube must be present on the machine running the backend. Use `python -m spaceapps.api --help` for alternate file paths, host, port, and additional allowed frontend origins.
+It listens on `http://127.0.0.1:8000/api/route` and uses the existing `new_algo.py` router, the Gale terrain tiles, and `backend/data/thermal.cub`. The frontend connects to this address automatically during development. The terrain tiles and thermal cube must be present on the machine running the backend. Use `backend/.venv/bin/python -m spaceapps.api --help` for alternate file paths, host, port, and additional allowed frontend origins.
 
 In production, the frontend defaults to `/api/route` on its own origin. Set `VITE_ROUTE_API_URL` in a local `.env.local` file or in the frontend build environment to use a different service. For example:
 

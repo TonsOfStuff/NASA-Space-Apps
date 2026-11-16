@@ -1,9 +1,8 @@
-src/spaceapps/data
-src/spaceapps/DTMs
-
-src/spaceapps/gale_crater_xyz.csv
-src/spaceapps/mars_elevations.csv
-src/spaceapps/gale_20m_mosaic.tif
+.DS_Store
+backend/.venv/
+backend/data/
+backend/routing-data/*
+!backend/routing-data/README.md
 
 # Python bytecode is generated locally, including by the data-prep scripts.
 __pycache__/

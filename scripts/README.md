@@ -1,5 +1,10 @@
 # Preparing the Mars elevation data
 
+Install the Python dependencies with `(cd backend && uv sync)` from the
+repository root. `merge_dtms.py` merges the original tiles from
+`backend/data/DTMs/` into `backend/data/gale_20m_mosaic.tif`; use `--help` to
+change either path. It refuses to overwrite an existing mosaic.
+
 `interpolate_dem_gaps.py` creates a separate, estimated DEM and a provenance raster. It never modifies the source DEM. The original Gale mosaic contains very long narrow NoData seams connected to its outer missing region, so looking only for isolated, enclosed holes would miss them.
 
 A missing pixel is eligible only when **original valid source cells are present on both sides** along the same horizontal, vertical or diagonal line, with a gap no wider than the configured pixel limit. The solver includes all eight immediate neighboring positions, weighted by inverse squared projected distance. Neighbors that are also eligible missing pixels are solved together; other unknown neighbors provide no assumed elevation. Original valid pixels are unchanged in the interpolated output. Boundary pixels, unsupported gaps and components larger than the configured limit remain NoData.
@@ -7,13 +12,13 @@ A missing pixel is eligible only when **original valid source cells are present 
 To recreate the derived Gale products from the repository root:
 
 ```sh
-.venv/bin/python scripts/interpolate_dem_gaps.py \
-  src/spaceapps/gale_20m_mosaic.tif \
-  --output src/spaceapps/data/gale_20m_interpolated.tif \
-  --provenance src/spaceapps/data/gale_20m_interpolated_provenance.tif \
+backend/.venv/bin/python scripts/interpolate_dem_gaps.py \
+  backend/data/gale_20m_mosaic.tif \
+  --output backend/data/gale_20m_interpolated.tif \
+  --provenance backend/data/gale_20m_interpolated_provenance.tif \
   --max-gap-width 2 \
   --max-component-cells 4096 \
-  --smooth-output src/spaceapps/data/gale_20m_interpolated_smoothed_sigma1.tif \
+  --smooth-output backend/data/gale_20m_interpolated_smoothed_sigma1.tif \
   --smooth-sigma 1
 ```
 
@@ -27,12 +32,12 @@ The local DEM generated with these settings interpolated 4,242 cells; 22,061,853
 
 `blend_dem_overlap.py` creates a separate DEM by gradually blending source tile 3 into tile 4 near their shared boundary. It retains existing gap fills, excludes areas owned by the higher-priority tiles 1 and 2, leaves unsupported NoData unchanged, and marks every changed cell as class 1 in a new provenance raster. The default feather width is 128 source pixels (about 2.6 km). This reduces an abrupt step but does not establish which tile is more accurate or correct their registration.
 
-The exact command to recreate the active blended DEM is in the [frontend setup](../web/README.md). On the current data, 1,084,886 heights were blended; over 2,816 adjacent-cell comparisons along the central boundary, the 90th-percentile height jump fell from about 198 to 8 source height units. These measurements are specific to this seam and dataset.
+The exact command to recreate the active blended DEM is in the [frontend setup](../frontend/README.md). On the current data, 1,084,886 heights were blended; over 2,816 adjacent-cell comparisons along the central boundary, the 90th-percentile height jump fell from about 198 to 8 source height units. These measurements are specific to this seam and dataset.
 
-The frontend and team backend must explicitly select a derived DEM before they will use it. To regenerate map tiles with a different DEM, see `prepare_gale.py --help`; producing the GeoTIFF does not automatically change the running application. The source rasters and derived data products are ignored by Git.
+The tile generator and backend default to the blended DEM. To use a different DEM, see `prepare_gale.py --help` and `spaceapps.api --help`; producing another GeoTIFF does not automatically change the running application. The source rasters and derived data products are ignored by Git.
 
-Run the interpolation tests with:
+Run the data preparation tests from the repository root with:
 
 ```sh
-.venv/bin/python -m unittest discover -s tests -p 'test_interpolate_dem_gaps.py' -v
+backend/.venv/bin/python -m unittest discover -s scripts/tests -v
 ```

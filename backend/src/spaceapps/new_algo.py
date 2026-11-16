@@ -627,7 +627,7 @@ def load_patch(tif, size_m, center, center_lonlat=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--tif", type=Path, default=Path(__file__).resolve().parent / "MSL_Gale_DEM_Mosaic_1m_v3.tif")
+    parser.add_argument("--tif", type=Path, default=Path(__file__).resolve().parents[2] / "data/gale_20m_mosaic.tif")
     parser.add_argument("--size-m", type=float, default=1000, help="Approximate patch width and height in meters (default: %(default)s)")
     parser.add_argument("--center", type=float, nargs=2, metavar=("E", "N"), help="Patch center in projecte --d coordinates (default: raster center)")
     parser.add_argument("--center-lonlat", type=float, nargs=2, metavar=("LON", "LAT"), help="Patch center as longitude latitude in degrees (alternative to --center)")
