@@ -39,7 +39,7 @@ DEFAULT_MANIFEST = ROOT / "frontend/public/data/gale/manifest.json"
 DEFAULT_TERRAIN = ROOT / "frontend/public/data/gale/tiles/terrain"
 DEFAULT_DEM = BACKEND_ROOT / "data/gale_20m_interpolated_feathered.tif"
 DEFAULT_THERMAL = BACKEND_ROOT / "data/thermal.cub"
-MAX_CELLS = 10_000_000
+MAX_CELLS = 1_000_000
 
 # Numba's workqueue threading layer aborts the process if parallel kernels
 # overlap across Python threads. Both route construction and shade tiles call
