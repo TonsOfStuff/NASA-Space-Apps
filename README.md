@@ -2,6 +2,8 @@
 
 An exploratory Mars map and terrain-routing application.
 
+Note that routing is slowest on a cold start. After that, should take around a second.
+
 See for yourself here: [https://marmap.quobits.workers.dev/](https://marmap.quobits.workers.dev/)
 
 <img width="1512" height="881" alt="image" src="https://github.com/user-attachments/assets/224e7d31-0afc-419b-b914-9a777d747a0a" />
